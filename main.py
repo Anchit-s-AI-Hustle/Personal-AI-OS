@@ -11,6 +11,7 @@ import argparse
 import signal
 import sys
 
+# pyrefly: ignore [missing-import]
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
