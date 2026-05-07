@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "cc-workflow-studio"
+  ],
+  "enableAllProjectMcpServers": true
+}
