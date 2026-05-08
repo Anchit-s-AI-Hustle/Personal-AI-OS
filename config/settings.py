@@ -97,12 +97,24 @@ class Settings:
     expected_google_account: Optional[str]
     oauth_chrome_profile: Optional[str]
 
-    # OAuth scopes
+    # One-time historical Gmail scan
+    initial_scan_days: int       # 0 = disabled
+    initial_scan_max_messages: int
+
+    # Google Chat poller
+    enable_chat_poller: bool
+    chat_polling_interval: int
+
+    # OAuth scopes — Chat scopes added so we can also read Spaces/DMs.
+    # Adding new scopes here triggers a re-consent on next run if the
+    # current token doesn't have them.
     oauth_scopes: tuple = field(
         default=(
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.modify",
             "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/chat.spaces.readonly",
+            "https://www.googleapis.com/auth/chat.messages.readonly",
         )
     )
 
@@ -144,7 +156,7 @@ def _load() -> Settings:
         llm_model=_env("GEMINI_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash",
         google_sheet_id=sheet_id,
         google_sheet_tab=_env("GOOGLE_SHEET_TAB", "Tasks") or "Tasks",
-        polling_interval=_env_int("POLLING_INTERVAL", 300),
+        polling_interval=_env_int("POLLING_INTERVAL", 30),
         gmail_query_filter=_env(
             "GMAIL_QUERY_FILTER", "is:unread newer_than:2d"
         ) or "is:unread newer_than:2d",
@@ -167,6 +179,10 @@ def _load() -> Settings:
         daily_summary_hour=_env_int("DAILY_SUMMARY_HOUR", 21),
         expected_google_account=_env("EXPECTED_GOOGLE_ACCOUNT"),
         oauth_chrome_profile=_env("OAUTH_CHROME_PROFILE"),
+        initial_scan_days=_env_int("INITIAL_SCAN_DAYS", 0),
+        initial_scan_max_messages=_env_int("INITIAL_SCAN_MAX_MESSAGES", 1000),
+        enable_chat_poller=_env_bool("ENABLE_CHAT_POLLER", True),
+        chat_polling_interval=_env_int("CHAT_POLLING_INTERVAL", 60),
     )
 
 

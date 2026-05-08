@@ -61,6 +61,7 @@ def _preflight() -> None:
         # assume the current interpreter has its own copy and let it
         # through — no need to nag.
         try:
+            # pyrefly: ignore [missing-import]
             import tenacity  # noqa: F401
             return
         except ImportError:
@@ -87,10 +88,11 @@ def _preflight() -> None:
 _preflight()
 
 from config import settings  # noqa: E402,F401  -- importing validates env vars
+from chat import ChatPoller  # noqa: E402
 from database import get_db  # noqa: E402
 from gmail import GmailPoller  # noqa: E402
 from meetings import MeetingPipeline  # noqa: E402
-from services import DailySummaryWorker, EmailService  # noqa: E402
+from services import ChatService, DailySummaryWorker, EmailService  # noqa: E402
 from sheets import SheetsSyncWorker  # noqa: E402
 from utils.logger import get_logger, setup_logging  # noqa: E402
 
@@ -99,11 +101,19 @@ logger = get_logger("main")
 
 
 class PersonalAIOS:
-    def __init__(self, *, enable_email: bool, enable_meetings: bool) -> None:
+    def __init__(
+        self,
+        *,
+        enable_email: bool,
+        enable_meetings: bool,
+        enable_chat: bool,
+    ) -> None:
         self.stop_event = threading.Event()
         self._enable_email = enable_email
         self._enable_meetings = enable_meetings
+        self._enable_chat = enable_chat
         self._gmail_poller: Optional[GmailPoller] = None
+        self._chat_poller: Optional[ChatPoller] = None
         self._sheets_worker: Optional[SheetsSyncWorker] = None
         self._meeting_pipeline: Optional[MeetingPipeline] = None
         self._daily_worker: Optional[DailySummaryWorker] = None
@@ -124,10 +134,23 @@ class PersonalAIOS:
         else:
             logger.info("Email module disabled by flag.")
 
-        # Sheets sync only matters if SOMETHING is producing tasks. If both
-        # email and meetings are off, skip it entirely so the boot path
-        # doesn't trigger a Google OAuth flow.
-        if self._enable_email or (self._enable_meetings and settings.enable_meeting_capture):
+        if self._enable_chat and settings.enable_chat_poller:
+            chat_service = ChatService()
+            self._chat_poller = ChatPoller(
+                on_message=chat_service.process_message,
+                stop_event=self.stop_event,
+            )
+            self._chat_poller.start()
+        else:
+            logger.info("Chat module disabled by flag or config.")
+
+        # Sheets sync runs whenever ANY producer is on.
+        any_producer = (
+            self._enable_email
+            or (self._enable_meetings and settings.enable_meeting_capture)
+            or (self._enable_chat and settings.enable_chat_poller)
+        )
+        if any_producer:
             self._sheets_worker = SheetsSyncWorker(stop_event=self.stop_event)
             self._sheets_worker.start()
         else:
@@ -163,7 +186,12 @@ class PersonalAIOS:
         if self._meeting_pipeline is not None:
             self._meeting_pipeline.shutdown()
 
-        for worker in (self._gmail_poller, self._sheets_worker, self._daily_worker):
+        for worker in (
+            self._gmail_poller,
+            self._chat_poller,
+            self._sheets_worker,
+            self._daily_worker,
+        ):
             if worker is not None and worker.is_alive():
                 worker.join(timeout=10.0)
 
@@ -195,15 +223,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Personal AI OS")
     p.add_argument("--no-email", action="store_true", help="disable Gmail polling")
     p.add_argument("--no-meetings", action="store_true", help="disable audio capture")
+    p.add_argument("--no-chat", action="store_true", help="disable Google Chat polling")
+    p.add_argument(
+        "--reset-initial-scan",
+        action="store_true",
+        help="Delete the initial-scan sentinel so the historical sweep runs again on this boot.",
+    )
     return p.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(list(argv if argv is not None else sys.argv[1:]))
 
+    if args.reset_initial_scan:
+        sentinel = settings.database_path.parent / ".initial_scan_done"
+        if sentinel.exists():
+            sentinel.unlink()
+            print(f"[main] Removed sentinel {sentinel}; historical scan will run on this boot.")
+        else:
+            print(f"[main] No sentinel at {sentinel} — initial scan was not done yet.")
+
     app = PersonalAIOS(
         enable_email=not args.no_email,
         enable_meetings=not args.no_meetings,
+        enable_chat=not args.no_chat,
     )
     _install_signal_handlers(app)
 

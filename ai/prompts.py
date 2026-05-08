@@ -21,7 +21,13 @@ from textwrap import dedent
 USER_CONTEXT = dedent(
     """
     USER CONTEXT (use this to weight what matters):
-    - The user works at Vahdam India, a premium tea D2C brand.
+    - The user is Anchit Tandon at Vahdam India, a premium tea D2C brand.
+    - Direct team members: Aman, Manisha, Arihant. Pay extra attention to:
+        * Anything they need to do (mark them as the SPOC).
+        * Anything Anchit needs to ask them or unblock for them.
+        * Anything they've committed to but hasn't progressed.
+      If a task obviously belongs to one of them, set "owner" / SPOC to
+      their name verbatim.
     - Primary goal: grow D2C revenue across owned web (Shopify), Amazon US/IN,
       and other marketplaces. Geographies of focus: US, India, EU, UK.
     - Levers the user cares about most:

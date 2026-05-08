@@ -13,6 +13,7 @@ If `EXPECTED_GOOGLE_ACCOUNT` is set, we:
 """
 from __future__ import annotations
 
+import json
 import threading
 from typing import Optional
 
@@ -29,6 +30,15 @@ logger = get_logger(__name__)
 
 _lock = threading.Lock()
 _cached_creds: Optional[Credentials] = None
+
+
+def _granted_scopes(token_path) -> set[str]:
+    """Read the scopes Google actually granted from the saved token JSON."""
+    try:
+        data = json.loads(token_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    return set(data.get("scopes") or [])
 
 
 class WrongGoogleAccountError(RuntimeError):
@@ -176,6 +186,23 @@ def get_credentials(force_refresh: bool = False) -> Credentials:
             except Exception as exc:  # corrupt token file
                 logger.warning("Could not load %s: %s — restarting OAuth.", token_path, exc)
                 creds = None
+
+            # If we've added new scopes since this token was issued, force a
+            # fresh consent so all APIs work. Without this, calls to the new
+            # scopes would silently 403.
+            if creds is not None:
+                granted = _granted_scopes(token_path)
+                missing = set(settings.oauth_scopes) - granted
+                if missing:
+                    logger.info(
+                        "Token missing scopes %s; restarting OAuth to grant them.",
+                        sorted(missing),
+                    )
+                    try:
+                        token_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    creds = None
 
         if creds and creds.expired and creds.refresh_token:
             try:

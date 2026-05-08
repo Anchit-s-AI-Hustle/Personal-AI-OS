@@ -53,6 +53,22 @@ class TaskService:
             tasks=tasks,
         )
 
+    def save_chat_tasks(
+        self,
+        *,
+        chat_message_id: str,
+        sender: Optional[str],
+        chat_summary: Optional[str],
+        tasks: Iterable[ExtractedTask],
+    ) -> int:
+        return self._save(
+            source_type="Chat",
+            source_ref_id=f"chat:{chat_message_id}",
+            summary=chat_summary,
+            default_speaker=sender,
+            tasks=tasks,
+        )
+
     def _save(
         self,
         *,
