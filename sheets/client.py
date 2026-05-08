@@ -14,12 +14,13 @@ Column layout (same in all three tabs):
     A  Task Heading
     B  Task Description
     C  Status
-    D  Why We're Doing This
-    E  Growth Pillar
-    F  SPOC
-    G  Priority
-    H  Go Live
-    I  Remarks
+    D  Source            (Email | Chat | Meeting)
+    E  Why We're Doing This
+    F  Growth Pillar
+    G  SPOC
+    H  Priority
+    I  Go Live
+    J  Remarks
 """
 from __future__ import annotations
 
@@ -48,6 +49,7 @@ HEADERS: list[str] = [
     "Task Heading",
     "Task Description",
     "Status",
+    "Source",
     "Why We're Doing This",
     "Growth Pillar",
     "SPOC",
@@ -164,7 +166,7 @@ class SheetsClient:
         retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
 
     def _ensure_header_row(self, tab: str) -> None:
-        rng = f"'{tab}'!A1:I1"
+        rng = f"'{tab}'!A1:J1"
 
         def _read() -> list:
             resp = (

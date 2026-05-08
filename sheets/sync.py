@@ -35,11 +35,12 @@ BATCH_SIZE = 50
 
 def _row_for_task(task) -> list[str]:
     """
-    Map a DB row to the 9-column sheet shape.
+    Map a DB row to the 10-column sheet shape.
 
     Column order (matches HEADERS in sheets/client.py):
-      Task Heading | Task Description | Status | Why We're Doing This |
-      Growth Pillar | SPOC | Priority | Go Live | Remarks
+      Task Heading | Task Description | Status | Source |
+      Why We're Doing This | Growth Pillar | SPOC | Priority |
+      Go Live | Remarks
     """
     # `task` is a sqlite3.Row; .keys() lets us tolerate older rows that
     # predate the migration columns.
@@ -55,6 +56,7 @@ def _row_for_task(task) -> list[str]:
         get("task"),                          # Task Heading
         get("task_description"),              # Task Description
         get("status") or "open",              # Status
+        get("source_type") or "Unknown",      # Source (Email | Chat | Meeting)
         get("rationale"),                     # Why We're Doing This
         get("growth_pillar") or "Other",      # Growth Pillar
         get("sender_or_speaker"),             # SPOC

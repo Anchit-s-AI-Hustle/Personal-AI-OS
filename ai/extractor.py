@@ -21,7 +21,6 @@ from database.models import (
 from utils.logger import get_logger
 
 from . import prompts
-from .gemini_client import GeminiClient, get_llm_client
 
 logger = get_logger(__name__)
 
@@ -94,8 +93,13 @@ def _coerce_task(raw: dict[str, Any], default_speaker: Optional[str] = None) -> 
 
 
 class Extractor:
-    def __init__(self, client: Optional[GeminiClient] = None) -> None:
-        self.client = client or get_llm_client()
+    def __init__(self, client=None) -> None:
+        # Lazy import to avoid a circular: ai.__init__ imports Extractor,
+        # but get_llm_client() is defined in ai.__init__.
+        if client is None:
+            from . import get_llm_client
+            client = get_llm_client()
+        self.client = client
 
     # --- email ---------------------------------------------------------------
 
