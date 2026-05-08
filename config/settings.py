@@ -79,11 +79,13 @@ class Settings:
     audio_input_device: Optional[str]
     enable_meeting_capture: bool
 
-    # Whisper
+    # Speech-to-text
+    stt_backend: str   # "local" | "groq"
     whisper_model: str
     whisper_device: str
     whisper_compute_type: str
     whisper_language: Optional[str]
+    groq_whisper_model: str
 
     # Paths
     project_root: Path
@@ -189,10 +191,12 @@ def _load() -> Settings:
         audio_sample_rate=_env_int("AUDIO_SAMPLE_RATE", 16000),
         audio_input_device=_env("AUDIO_INPUT_DEVICE"),
         enable_meeting_capture=_env_bool("ENABLE_MEETING_CAPTURE", True),
+        stt_backend=(_env("STT_BACKEND", "local") or "local").strip().lower(),
         whisper_model=_env("WHISPER_MODEL", "base") or "base",
         whisper_device=_env("WHISPER_DEVICE", "cpu") or "cpu",
         whisper_compute_type=_env("WHISPER_COMPUTE_TYPE", "int8") or "int8",
         whisper_language=_env("WHISPER_LANGUAGE"),
+        groq_whisper_model=_env("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo") or "whisper-large-v3-turbo",
         project_root=PROJECT_ROOT,
         database_path=_resolve_path(_env("DATABASE_PATH"), "./data/personal_ai_os.db"),
         audio_chunks_dir=_resolve_path(_env("AUDIO_CHUNKS_DIR"), "./data/audio_chunks"),

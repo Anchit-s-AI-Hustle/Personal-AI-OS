@@ -29,7 +29,9 @@ from .errors import QuotaExhaustedError
 
 logger = get_logger(__name__)
 
-_MIN_INTERVAL_SECONDS = 1.5
+# Groq's free-tier RPM is 30 -> max ~1 call every 2 seconds. Use 2.5s to
+# leave a 25% safety margin so the SDK's retry handler doesn't kick in.
+_MIN_INTERVAL_SECONDS = 2.5
 _QUOTA_PAUSE_SECONDS = 60 * 60  # 1 hour, mirrors Gemini client
 
 _RETRYABLE: tuple[type[BaseException], ...] = (

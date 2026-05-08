@@ -47,12 +47,13 @@ def _column_widths() -> dict[str, int]:
         "A": 36,  # Task Heading
         "B": 60,  # Task Description
         "C": 12,  # Status
-        "D": 50,  # Why We're Doing This
-        "E": 18,  # Growth Pillar
-        "F": 22,  # SPOC
-        "G": 12,  # Priority
-        "H": 18,  # Go Live
-        "I": 30,  # Remarks
+        "D": 12,  # Source (Email | Chat | Meeting)
+        "E": 50,  # Why We're Doing This
+        "F": 18,  # Growth Pillar
+        "G": 22,  # SPOC
+        "H": 12,  # Priority
+        "I": 18,  # Go Live
+        "J": 30,  # Remarks
     }
 
 

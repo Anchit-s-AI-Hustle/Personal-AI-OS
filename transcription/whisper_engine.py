@@ -16,12 +16,13 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from config import settings
 from utils.logger import get_logger
+
+from .types import TranscriptionResult
 
 logger = get_logger(__name__)
 
@@ -55,15 +56,6 @@ def _probe_whisper(model: str, device: str, compute_type: str) -> tuple[bool, st
 
     err = (result.stderr or "").strip()
     return False, f"python exception: {err.splitlines()[-1] if err else 'unknown'}"
-
-
-@dataclass
-class TranscriptionResult:
-    text: str
-    language: Optional[str]
-    language_probability: Optional[float]
-    duration: Optional[float]
-    segments: list[dict] = field(default_factory=list)
 
 
 class WhisperEngine:
