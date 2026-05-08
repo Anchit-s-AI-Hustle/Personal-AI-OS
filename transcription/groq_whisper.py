@@ -24,6 +24,7 @@ from config import settings
 from utils.logger import get_logger
 from utils.retry import retry_call
 
+from .lexicon import correct_names, whisper_prompt
 from .types import TranscriptionResult
 
 logger = get_logger(__name__)
@@ -88,31 +89,37 @@ class GroqWhisperEngine:
                     "file": (audio_path.name, f.read()),
                     "model": self._model,
                     "response_format": "verbose_json",
+                    # Vocabulary hint — this is the BIG accuracy win for
+                    # names + brand jargon. Whisper biases tokenisation
+                    # toward terms in this string.
+                    "prompt": whisper_prompt(),
                 }
                 if self._language:
                     kwargs["language"] = self._language
                 resp = self._client.audio.transcriptions.create(**kwargs)
 
-            text = (getattr(resp, "text", "") or "").strip()
+            raw_text = (getattr(resp, "text", "") or "").strip()
+            # Belt-and-braces: even with the prompt, Whisper sometimes
+            # still mishears. correct_names() rewrites known aliases.
+            text = correct_names(raw_text)
             language = getattr(resp, "language", None)
             duration = getattr(resp, "duration", None)
             segments_raw = getattr(resp, "segments", []) or []
             segments: list[dict] = []
             for seg in segments_raw:
-                # Groq returns segments as dicts in verbose_json.
                 if isinstance(seg, dict):
                     segments.append(
                         {
                             "start": seg.get("start"),
                             "end": seg.get("end"),
-                            "text": (seg.get("text") or "").strip(),
+                            "text": correct_names((seg.get("text") or "").strip()),
                         }
                     )
 
             return TranscriptionResult(
                 text=text,
                 language=language,
-                language_probability=None,  # Groq doesn't expose this
+                language_probability=None,
                 duration=duration,
                 segments=segments,
             )

@@ -106,6 +106,10 @@ class Settings:
     expected_google_account: Optional[str]
     oauth_chrome_profile: Optional[str]
 
+    # "Self" identity for chat — used to label outgoing messages/tasks.
+    self_chat_user_id: Optional[str]
+    self_display_name: str
+
     # One-time historical Gmail scan
     initial_scan_days: int       # 0 = disabled
     initial_scan_max_messages: int
@@ -208,6 +212,8 @@ def _load() -> Settings:
         daily_summary_hour=_env_int("DAILY_SUMMARY_HOUR", 21),
         expected_google_account=_env("EXPECTED_GOOGLE_ACCOUNT"),
         oauth_chrome_profile=_env("OAUTH_CHROME_PROFILE"),
+        self_chat_user_id=_env("SELF_CHAT_USER_ID"),
+        self_display_name=_env("SELF_DISPLAY_NAME", "Anchit (Self)") or "Anchit (Self)",
         initial_scan_days=_env_int("INITIAL_SCAN_DAYS", 0),
         initial_scan_max_messages=_env_int("INITIAL_SCAN_MAX_MESSAGES", 1000),
         enable_chat_poller=_env_bool("ENABLE_CHAT_POLLER", True),

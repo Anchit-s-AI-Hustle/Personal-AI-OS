@@ -12,15 +12,17 @@ status updates can patch both rows.
 
 Column layout (same in all three tabs):
     A  Task Heading
-    B  Task Description
+    B  Task Description     (always includes context: project / topic / customer)
     C  Status
-    D  Source            (Email | Chat | Meeting)
-    E  Why We're Doing This
-    F  Growth Pillar
-    G  SPOC
-    H  Priority
-    I  Go Live
-    J  Remarks
+    D  Source               (e.g. "Email | from Aman <aman@vahdam.com>")
+    E  Source Link          (clickable URL to the original mail / chat space)
+    F  Date Given           (when the source happened, local time)
+    G  Task Deadline        (when the task is due, parsed from content)
+    H  Why We're Doing This
+    I  Growth Pillar
+    J  SPOC                 (name + email/phone if known)
+    K  Priority
+    L  Remarks
 """
 from __future__ import annotations
 

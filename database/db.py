@@ -59,6 +59,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("growth_pillar",    "TEXT"),
         ("sheet_row_source", "INTEGER"),
         ("sheet_row_all",    "INTEGER"),
+        ("source_detail",    "TEXT"),    # human-readable origin label
+        ("source_link",      "TEXT"),    # direct URL to the original message
+        ("date_given",       "TEXT"),    # ISO 8601 — when the source was created
+        ("spoc_contact",     "TEXT"),    # email / phone if known, otherwise null
     ]
     for col, col_type in additions:
         if col not in existing:
@@ -282,6 +286,10 @@ class Database:
         task_description: Optional[str] = None,
         rationale: Optional[str] = None,
         growth_pillar: Optional[str] = None,
+        source_detail: Optional[str] = None,
+        source_link: Optional[str] = None,
+        date_given: Optional[str] = None,
+        spoc_contact: Optional[str] = None,
     ) -> Optional[int]:
         """Returns the inserted row id, or None if it was a duplicate."""
         dedupe_hash = self.make_task_dedupe_hash(source_type, source_ref_id, task)
@@ -291,9 +299,10 @@ class Database:
                 INSERT OR IGNORE INTO extracted_tasks(
                     source_type, source_ref_id, task, task_description, rationale,
                     growth_pillar, deadline, urgency, sender_or_speaker, summary,
+                    source_detail, source_link, date_given, spoc_contact,
                     status, created_at, dedupe_hash
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
                 (
                     source_type,
@@ -306,6 +315,10 @@ class Database:
                     urgency,
                     sender_or_speaker,
                     summary,
+                    source_detail,
+                    source_link,
+                    date_given,
+                    spoc_contact,
                     _utcnow(),
                     dedupe_hash,
                 ),
@@ -315,9 +328,10 @@ class Database:
     def unsynced_tasks(self, limit: int = 100) -> list[sqlite3.Row]:
         return self.fetchall(
             """
-            SELECT id, source_type, source_ref_id, task, task_description,
-                   rationale, growth_pillar, deadline, urgency,
-                   sender_or_speaker, summary, status, created_at
+            SELECT id, source_type, source_ref_id, source_detail, source_link,
+                   date_given, task, task_description, rationale, growth_pillar,
+                   deadline, urgency, sender_or_speaker, spoc_contact, summary,
+                   status, created_at
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
              ORDER BY created_at ASC

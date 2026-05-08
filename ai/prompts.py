@@ -28,6 +28,20 @@ USER_CONTEXT = dedent(
         * Anything they've committed to but hasn't progressed.
       If a task obviously belongs to one of them, set "owner" / SPOC to
       their name verbatim.
+
+    NAME CANONICALISATION (important for transcribed audio):
+    The transcription may have misheard names. If you encounter any of
+    these spellings, normalise them:
+      "Anshith" / "Anshit" / "Ancheet" / "Anchet" / "Ankit" / "Inchit"
+        / "Aanchit"               -> Anchit
+      "Amaan" / "Aamen" / "Ahmen" / "Ammon"                  -> Aman
+      "Maneesha" / "Manesha" / "Maneeshaa" / "Munisha"       -> Manisha
+      "Arihaan" / "Arihaant" / "Aarihant"                    -> Arihant
+      "Akash" / "Aakaash"                                    -> Aakash
+      "Shezad" / "Shahzad"                                   -> Shehzad
+    Always emit the canonical form in `owner` and any text fields. If
+    the audio mentions a name that ALMOST matches one of the above,
+    err toward the canonical name unless context clearly says otherwise.
     - Primary goal: grow D2C revenue across owned web (Shopify), Amazon US/IN,
       and other marketplaces. Geographies of focus: US, India, EU, UK.
     - Levers the user cares about most:

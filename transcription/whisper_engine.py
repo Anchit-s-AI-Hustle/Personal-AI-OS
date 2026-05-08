@@ -22,6 +22,7 @@ from typing import Optional
 from config import settings
 from utils.logger import get_logger
 
+from .lexicon import correct_names, whisper_prompt
 from .types import TranscriptionResult
 
 logger = get_logger(__name__)
@@ -152,6 +153,8 @@ class WhisperEngine:
         # Hindi-English code-switched audio works best with `language=None`
         # (auto-detect per chunk). Translation is OFF — we keep the original
         # language so the LLM can read both Hindi and English.
+        # `initial_prompt` biases tokenisation toward our domain vocabulary
+        # so names like "Anchit" / "Vahdam" / "Klaviyo" get heard correctly.
         segments_iter, info = model.transcribe(
             str(audio_path),
             language=self._language,  # None lets Whisper detect
@@ -159,17 +162,19 @@ class WhisperEngine:
             beam_size=1,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
+            initial_prompt=whisper_prompt(),
         )
 
         text_parts: list[str] = []
         seg_dicts: list[dict] = []
         for seg in segments_iter:
-            text_parts.append(seg.text.strip())
+            corrected = correct_names(seg.text.strip())
+            text_parts.append(corrected)
             seg_dicts.append(
                 {
                     "start": float(seg.start) if seg.start is not None else None,
                     "end": float(seg.end) if seg.end is not None else None,
-                    "text": seg.text.strip(),
+                    "text": corrected,
                 }
             )
 

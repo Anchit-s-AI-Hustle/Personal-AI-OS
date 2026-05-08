@@ -52,11 +52,22 @@ def _row_for_task(task) -> list[str]:
             return v if v is not None else ""
         return ""
 
+    # Source column = "<source_type> | <human-readable detail>" if we have
+    # the detail (sender name, DM partner, space name, etc.), otherwise
+    # just the type. Examples:
+    #   "Email | from Aman Kumar"
+    #   "Chat | DM with Manisha Kushwaha"
+    #   "Chat | Space: D2C - Content + Conversion - ROAS"
+    #   "Meeting | voice memo by Anchit (Self)"
+    src_type = get("source_type") or "Unknown"
+    src_detail = get("source_detail")
+    source_label = f"{src_type} | {src_detail}" if src_detail else src_type
+
     return [
         get("task"),                          # Task Heading
         get("task_description"),              # Task Description
         get("status") or "open",              # Status
-        get("source_type") or "Unknown",      # Source (Email | Chat | Meeting)
+        source_label,                         # Source
         get("rationale"),                     # Why We're Doing This
         get("growth_pillar") or "Other",      # Growth Pillar
         get("sender_or_speaker"),             # SPOC
