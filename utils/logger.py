@@ -51,8 +51,22 @@ def setup_logging(level: Optional[str] = None) -> None:
     root.addHandler(file_handler)
 
     # Tame chatty deps.
-    for noisy in ("googleapiclient.discovery_cache", "googleapiclient.discovery", "urllib3", "httpx"):
+    for noisy in (
+        "googleapiclient.discovery_cache",
+        "googleapiclient.discovery",
+        "urllib3",
+        "httpx",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # huggingface_hub re-emits warnings via the logging system too — bump it
+    # one level higher so the auth nag and symlink advisory disappear from
+    # our log file. Real errors (download failure, 4xx/5xx) still come through.
+    for hf_logger in (
+        "huggingface_hub",
+        "huggingface_hub.utils._http",
+        "huggingface_hub.file_download",
+    ):
+        logging.getLogger(hf_logger).setLevel(logging.ERROR)
 
     _CONFIGURED = True
 

@@ -14,8 +14,33 @@ import signal
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Optional
+
+# Force UTF-8 stdout/stderr so non-ASCII characters in log messages
+# (em-dashes, accented names, Hindi transcripts) display correctly on
+# Windows PowerShell, which defaults to the OEM codepage.
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+# Silence noisy huggingface_hub warnings BEFORE faster_whisper is imported.
+# Both are cosmetic on Windows and have nothing to do with our pipeline.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")  # keep progress bar; kill warnings only
+warnings.filterwarnings(
+    "ignore",
+    message=r".*sending unauthenticated requests to the HF Hub.*",
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*cache-system uses symlinks by default.*",
+)
 
 
 def _preflight() -> None:
