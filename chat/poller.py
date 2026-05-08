@@ -17,6 +17,7 @@ from typing import Callable, Optional
 
 from googleapiclient.errors import HttpError
 
+from ai.gemini_client import QuotaExhaustedError
 from config import settings
 from database import get_db
 from utils.logger import get_logger
@@ -157,6 +158,12 @@ class ChatPoller(threading.Thread):
                 try:
                     self._on_message(msg)
                     total_new += 1
+                except QuotaExhaustedError:
+                    logger.warning(
+                        "Chat poll halted: Gemini quota exhausted (processed %d so far).",
+                        total_new,
+                    )
+                    return
                 except Exception:
                     logger.exception("Failed to process chat message %s", msg.name)
                     continue

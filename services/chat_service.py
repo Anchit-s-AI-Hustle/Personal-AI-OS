@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ai import get_extractor
+from ai.gemini_client import QuotaExhaustedError
 from chat.client import ChatMessage
 from database import get_db
 from utils.logger import get_logger
@@ -44,6 +45,9 @@ class ChatService:
                 started_at=msg.create_time,
                 transcript=wrapped,
             )
+        except QuotaExhaustedError:
+            # Bubble up so the chat poller halts the current batch.
+            raise
         except Exception:
             logger.exception("Gemini extraction failed for chat msg %s", msg.message_id)
             self._db.record_processed_email(

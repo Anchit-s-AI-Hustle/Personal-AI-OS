@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from ai.gemini_client import QuotaExhaustedError
 from config import settings
 from database import get_db
 from utils.logger import get_logger
@@ -134,6 +135,16 @@ class GmailPoller(threading.Thread):
                 msg = self._client.fetch_message(mid)
                 self._on_message(msg)
                 processed += 1
+            except QuotaExhaustedError:
+                logger.warning(
+                    "Gemini quota exhausted; halting this poll cycle after %d/%d "
+                    "messages. Will retry remaining %d on the next cycle once the "
+                    "pause expires.",
+                    processed,
+                    len(new_ids),
+                    len(new_ids) - processed,
+                )
+                return processed
             except Exception:
                 logger.exception("Failed to process Gmail message id=%s", mid)
                 self._db.log_event(

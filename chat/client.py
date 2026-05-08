@@ -25,6 +25,16 @@ from utils.retry import retry_call
 logger = get_logger(__name__)
 
 
+def _is_transient_http_error(exc: BaseException) -> bool:
+    """Don't retry permanent failures (4xx). Retry transient (5xx, network)."""
+    if isinstance(exc, HttpError):
+        status = exc.resp.status if exc.resp else 0
+        # 401 / 403 / 404 / 410 are permanent for our purposes — don't retry.
+        if 400 <= status < 500:
+            return False
+    return True
+
+
 @dataclass
 class ChatMessage:
     name: str               # full resource name: spaces/AAAA/messages/BBBB.CCCC
@@ -68,7 +78,12 @@ class ChatClient:
                 if not page_token:
                     return spaces
 
-        return retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
+        return retry_call(
+            _call,
+            attempts=3,
+            exceptions=(HttpError, TimeoutError),
+            should_retry=_is_transient_http_error,
+        )
 
     # --- messages ------------------------------------------------------------
 

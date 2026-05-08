@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ai import get_extractor
+from ai.gemini_client import QuotaExhaustedError
 from database import get_db
 from gmail.client import GmailMessage, get_gmail_client
 from utils.logger import get_logger
@@ -44,8 +45,14 @@ class EmailService:
                 received_at=msg.received_at,
                 body=msg.body_text,
             )
+        except QuotaExhaustedError:
+            # Don't mark the email as processed — we want to retry it once
+            # quota recovers. Re-raise so the poller stops the current
+            # batch immediately instead of looping through dozens of
+            # messages with the same outcome.
+            raise
         except Exception:
-            logger.exception("Claude extraction failed for email %s", msg.message_id)
+            logger.exception("Gemini extraction failed for email %s", msg.message_id)
             self._db.record_processed_email(
                 gmail_message_id=msg.message_id,
                 thread_id=msg.thread_id,
