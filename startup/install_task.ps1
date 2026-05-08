@@ -16,15 +16,15 @@
 
 [CmdletBinding()]
 param(
-    [string]$TaskName = "PersonalAIOS"
+    [string]$TaskName = 'PersonalAIOS'
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
 # Resolve the run.bat sitting next to this script.
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$runBat    = Join-Path $scriptDir "run.bat"
-$projectDir = Resolve-Path (Join-Path $scriptDir "..")
+$scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$runBat     = Join-Path $scriptDir 'run.bat'
+$projectDir = (Resolve-Path (Join-Path $scriptDir '..')).Path
 
 if (-not (Test-Path $runBat)) {
     throw "Could not find run.bat at $runBat"
@@ -35,13 +35,13 @@ Write-Host "  Project dir : $projectDir"
 Write-Host "  Runner      : $runBat"
 
 $action = New-ScheduledTaskAction `
-    -Execute "cmd.exe" `
-    -Argument "/c `"$runBat`"" `
+    -Execute 'cmd.exe' `
+    -Argument ('/c "' + $runBat + '"') `
     -WorkingDirectory $projectDir
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 
-$settings = New-ScheduledTaskSettingsSet `
+$taskSettings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
@@ -61,15 +61,15 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
 }
 
 Register-ScheduledTask `
-    -TaskName  $TaskName `
-    -Action    $action `
-    -Trigger   $trigger `
-    -Settings  $settings `
-    -Principal $principal `
-    -Description "Personal AI OS — email + meeting intelligence" | Out-Null
+    -TaskName    $TaskName `
+    -Action      $action `
+    -Trigger     $trigger `
+    -Settings    $taskSettings `
+    -Principal   $principal `
+    -Description 'Personal AI OS - email + meeting intelligence' | Out-Null
 
-Write-Host ""
+Write-Host ''
 Write-Host "Done. The task will start automatically at every logon."
 Write-Host "To start it right now:    Start-ScheduledTask -TaskName $TaskName"
 Write-Host "To check status:          Get-ScheduledTask -TaskName $TaskName"
-Write-Host "To remove later:          powershell -File startup\uninstall_task.ps1"
+Write-Host 'To remove later:          powershell -File startup\uninstall_task.ps1'

@@ -53,10 +53,14 @@ class PersonalAIOS:
         else:
             logger.info("Email module disabled by flag.")
 
-        # Sheets sync runs regardless — it flushes whatever the other
-        # workers wrote, so even a meeting-only run benefits from it.
-        self._sheets_worker = SheetsSyncWorker(stop_event=self.stop_event)
-        self._sheets_worker.start()
+        # Sheets sync only matters if SOMETHING is producing tasks. If both
+        # email and meetings are off, skip it entirely so the boot path
+        # doesn't trigger a Google OAuth flow.
+        if self._enable_email or (self._enable_meetings and settings.enable_meeting_capture):
+            self._sheets_worker = SheetsSyncWorker(stop_event=self.stop_event)
+            self._sheets_worker.start()
+        else:
+            logger.info("Sheets sync skipped: nothing to push.")
 
         if self._enable_meetings and settings.enable_meeting_capture:
             self._meeting_pipeline = MeetingPipeline(stop_event=self.stop_event)
