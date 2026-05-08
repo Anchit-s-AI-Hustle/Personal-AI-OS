@@ -178,7 +178,7 @@ def _load() -> Settings:
         llm_api_key=gemini_api_key,
         llm_model=_env("GEMINI_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash",
         groq_api_key=groq_api_key,
-        groq_model=_env("GROQ_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile",
+        groq_model=_env("GROQ_MODEL", "llama-3.1-8b-instant") or "llama-3.1-8b-instant",
         google_sheet_id=sheet_id,
         google_sheet_tab=_env("GOOGLE_SHEET_TAB", "Tasks") or "Tasks",
         polling_interval=_env_int("POLLING_INTERVAL", 30),
