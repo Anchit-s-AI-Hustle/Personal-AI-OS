@@ -64,12 +64,16 @@ class TaskService:
     ) -> int:
         inserted = 0
         for task in tasks:
-            if not task.task or not task.task.strip():
+            heading = (task.task_heading or "").strip()
+            if not heading:
                 continue
             row_id = self._db.insert_task(
                 source_type=source_type,
                 source_ref_id=source_ref_id,
-                task=task.task,
+                task=heading,
+                task_description=task.task_description or None,
+                rationale=task.rationale or None,
+                growth_pillar=task.growth_pillar or None,
                 deadline=task.deadline,
                 urgency=task.urgency,
                 sender_or_speaker=task.sender_or_speaker or default_speaker,
@@ -78,7 +82,7 @@ class TaskService:
             if row_id is not None:
                 inserted += 1
             else:
-                logger.debug("Duplicate task ignored: %r (ref=%s)", task.task, source_ref_id)
+                logger.debug("Duplicate task ignored: %r (ref=%s)", heading, source_ref_id)
 
         if inserted:
             logger.info(

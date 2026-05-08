@@ -43,6 +43,39 @@ USER_CONTEXT = dedent(
 ).strip()
 
 
+# Fixed enum so the AI doesn't invent new pillars over time. Keep this
+# list aligned with database.models.GROWTH_PILLARS.
+GROWTH_PILLARS_LIST = (
+    "Acquisition",      # paid media, SEO, influencer, affiliate, referral
+    "Conversion",       # CRO on PDP, cart, checkout
+    "AOV",              # bundles, upsells, gifting
+    "Retention",        # CRM/email/SMS/WhatsApp, subscription, loyalty
+    "Marketplace",      # Amazon, Flipkart, ranking, ads, reviews, listings
+    "Operations",       # OOS, fulfilment, customer service, returns
+    "Brand & Content",  # PR, content velocity, partnerships, social
+    "Margin",           # input cost, packaging, freight, ad efficiency
+    "Team & Process",   # internal ops, hiring, vendor management
+    "Other",            # genuinely none of the above
+)
+GROWTH_PILLARS_PROMPT_HINT = " | ".join(f'"{p}"' for p in GROWTH_PILLARS_LIST)
+
+
+# Shared task-shape spec so email + meeting prompts produce the same
+# structure and the extractor / sheets writer don't need branching.
+TASK_SHAPE_HINT = dedent(
+    f"""
+    Each task object MUST have these fields:
+      "task_heading":      string  // imperative, <=70 chars (sheet column "Task Heading")
+      "task_description":  string  // 1-3 sentence detail of what to do (sheet column "Task Description")
+      "rationale":         string  // why this task matters in plain English (sheet column "Why We're Doing This")
+      "growth_pillar":     one of [{GROWTH_PILLARS_PROMPT_HINT}]
+      "deadline":          string | null  // ISO date if known, else natural-language phrase from source ("Go Live")
+      "urgency":           "Low" | "Medium" | "High" | "Critical"   // becomes the "Priority" column
+      "owner":             string | null  // SPOC / who should do it; null if unknown
+    """
+).strip()
+
+
 # ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------
@@ -72,16 +105,16 @@ EMAIL_SYSTEM_PROMPT = dedent(
       "is_actionable": boolean,
       "summary": string,            // 1-2 sentences, plain English
       "tasks": [
-        {{
-          "task": string,           // imperative, e.g. "Reply to Aakash with Q3 numbers"
-          "deadline": string|null,  // ISO 8601 date or natural-language phrase from the email
-          "urgency": "Low" | "Medium" | "High" | "Critical"
-        }}
+        // Each task follows the TASK SHAPE below.
+        {{ ... }}
       ],
       "ideas": [string],            // growth/marketing/product ideas this email triggers
       "opportunities": [string],    // partnerships, channels, launches, customer asks worth pursuing
       "risks": [string]             // anything that could hurt revenue, brand, or ops
     }}
+
+    TASK SHAPE:
+    {TASK_SHAPE_HINT}
 
     Urgency rubric (D2C lens):
     - Critical: revenue-impacting now (listing suppressed, ad account paused,
@@ -145,12 +178,8 @@ MEETING_SYSTEM_PROMPT = dedent(
     {{
       "summary": string,            // 1-3 sentences capturing what was said
       "tasks": [
-        {{
-          "task": string,
-          "deadline": string|null,
-          "urgency": "Low" | "Medium" | "High" | "Critical",
-          "owner": string|null      // who is supposed to do it, if mentioned
-        }}
+        // Each task follows the TASK SHAPE below.
+        {{ ... }}
       ],
       "ideas":         [string],
       "blockers":      [string],
@@ -158,6 +187,9 @@ MEETING_SYSTEM_PROMPT = dedent(
       "decisions":     [string],
       "follow_ups":    [string]
     }}
+
+    TASK SHAPE:
+    {TASK_SHAPE_HINT}
     """
 ).strip()
 

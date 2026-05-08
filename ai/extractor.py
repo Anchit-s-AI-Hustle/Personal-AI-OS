@@ -15,6 +15,7 @@ from database.models import (
     EmailExtraction,
     ExtractedTask,
     MeetingChunkExtraction,
+    normalise_growth_pillar,
     normalise_urgency,
 )
 from utils.logger import get_logger
@@ -56,12 +57,36 @@ def _safe_str(v: Any) -> Optional[str]:
 
 
 def _coerce_task(raw: dict[str, Any], default_speaker: Optional[str] = None) -> Optional[ExtractedTask]:
-    task_text = _safe_str(raw.get("task"))
-    if not task_text:
+    # Prefer the new structured fields. Fall back to the legacy "task"
+    # field if the model used the old shape.
+    heading = _safe_str(raw.get("task_heading")) or _safe_str(raw.get("task"))
+    if not heading:
         return None
-    speaker = _safe_str(raw.get("owner")) or default_speaker
+
+    description = (
+        _safe_str(raw.get("task_description"))
+        or _safe_str(raw.get("description"))
+        or ""
+    )
+    rationale = (
+        _safe_str(raw.get("rationale"))
+        or _safe_str(raw.get("why"))
+        or _safe_str(raw.get("why_we_are_doing_this"))
+        or ""
+    )
+    pillar = (
+        _safe_str(raw.get("growth_pillar"))
+        or _safe_str(raw.get("pillar"))
+        or _safe_str(raw.get("category"))
+        or "Other"
+    )
+
+    speaker = _safe_str(raw.get("owner")) or _safe_str(raw.get("spoc")) or default_speaker
     return ExtractedTask(
-        task=task_text,
+        task_heading=heading,
+        task_description=description,
+        rationale=rationale,
+        growth_pillar=normalise_growth_pillar(pillar),
         urgency=normalise_urgency(_safe_str(raw.get("urgency"))),
         deadline=_safe_str(raw.get("deadline")),
         sender_or_speaker=speaker,

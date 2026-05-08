@@ -83,19 +83,27 @@ BEGIN
 END;
 
 -- Tasks extracted from any source. dedupe_hash prevents re-pushing the same task.
+-- task_description, rationale, growth_pillar, sheet_row_source and sheet_row_all
+-- are added by the idempotent migration in database/db.py if missing on
+-- existing installs.
 CREATE TABLE IF NOT EXISTS extracted_tasks (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type         TEXT NOT NULL,   -- Email | Meeting | Conversation
     source_ref_id       TEXT NOT NULL,   -- gmail_message_id or session_id:chunk
-    task                TEXT NOT NULL,
+    task                TEXT NOT NULL,   -- task heading
+    task_description    TEXT,
+    rationale           TEXT,
+    growth_pillar       TEXT,
     deadline            TEXT,
-    urgency             TEXT NOT NULL,   -- Low | Medium | High | Critical
+    urgency             TEXT NOT NULL,   -- Low | Medium | High | Critical (= "Priority")
     sender_or_speaker   TEXT,
     summary             TEXT,
     status              TEXT NOT NULL DEFAULT 'open', -- open | done | dropped
     created_at          TEXT NOT NULL,
     synced_to_sheets    INTEGER NOT NULL DEFAULT 0,
-    sheet_row           INTEGER,
+    sheet_row           INTEGER,         -- legacy single-tab row
+    sheet_row_source    INTEGER,         -- row in source-specific tab
+    sheet_row_all       INTEGER,         -- row in 'All Tasks' tab
     dedupe_hash         TEXT NOT NULL UNIQUE
 );
 

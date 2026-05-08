@@ -1,8 +1,25 @@
 """
 Google Sheets API client.
 
-Handles header bootstrapping, batched appends, and counting existing rows
-so we can store the row number where each task landed.
+Maintains three tabs in a fixed order:
+    1. All Tasks               (every task, both sources)
+    2. Tasks From Discussions  (meetings / voice memos)
+    3. Tasks From Mails        (email-derived)
+
+Every task gets dual-written: one row in its source-specific tab and
+one row in "All Tasks". The local DB stores both row numbers so future
+status updates can patch both rows.
+
+Column layout (same in all three tabs):
+    A  Task Heading
+    B  Task Description
+    C  Status
+    D  Why We're Doing This
+    E  Growth Pillar
+    F  SPOC
+    G  Priority
+    H  Go Live
+    I  Remarks
 """
 from __future__ import annotations
 
@@ -19,18 +36,33 @@ from utils.retry import retry_call
 
 logger = get_logger(__name__)
 
-# Order matters — these become the sheet's column layout.
+
+# Tab names — order matters; this is the order they're created/positioned.
+TAB_ALL_TASKS = "All Tasks"
+TAB_FROM_DISCUSSIONS = "Tasks From Discussions"
+TAB_FROM_MAILS = "Tasks From Mails"
+TAB_ORDER: tuple[str, ...] = (TAB_ALL_TASKS, TAB_FROM_DISCUSSIONS, TAB_FROM_MAILS)
+
+
 HEADERS: list[str] = [
-    "Timestamp",
-    "Source Type",
-    "Task",
-    "Deadline",
-    "Urgency",
-    "Sender/Speaker",
-    "Summary",
+    "Task Heading",
+    "Task Description",
     "Status",
-    "Source Reference ID",
+    "Why We're Doing This",
+    "Growth Pillar",
+    "SPOC",
+    "Priority",
+    "Go Live",
+    "Remarks",
 ]
+
+
+def source_tab_for(source_type: str) -> str:
+    """Map a task's source_type to its dedicated tab."""
+    s = (source_type or "").lower()
+    if s == "email":
+        return TAB_FROM_MAILS
+    return TAB_FROM_DISCUSSIONS
 
 
 class SheetsClient:
@@ -38,89 +70,189 @@ class SheetsClient:
         creds = get_credentials()
         self._svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
         self._sheet_id = settings.google_sheet_id
-        self._tab = settings.google_sheet_tab
-        self._headers_ready = False
+        self._tabs_ready = False
         self._lock = threading.Lock()
 
     # --- bootstrap -----------------------------------------------------------
 
-    def ensure_headers(self) -> None:
-        """Create the tab if missing and write headers if A1 is empty."""
+    def ensure_tabs(self) -> None:
+        """
+        Idempotent: create any missing tab in the right order, write headers
+        to anything that doesn't have them yet.
+        """
         with self._lock:
-            if self._headers_ready:
+            if self._tabs_ready:
                 return
 
-            self._ensure_tab_exists()
+            meta = self._fetch_meta()
+            existing = {
+                s["properties"]["title"]: s["properties"]
+                for s in meta.get("sheets", [])
+            }
 
-            def _read_a1() -> list:
-                resp = (
-                    self._svc.spreadsheets()
-                    .values()
-                    .get(spreadsheetId=self._sheet_id, range=f"'{self._tab}'!A1:I1")
-                    .execute()
+            # 1. Create any missing tabs.
+            create_requests: list[dict] = []
+            for i, tab in enumerate(TAB_ORDER):
+                if tab not in existing:
+                    create_requests.append(
+                        {"addSheet": {"properties": {"title": tab, "index": i}}}
+                    )
+            if create_requests:
+                logger.info(
+                    "Creating sheet tab(s): %s",
+                    [r["addSheet"]["properties"]["title"] for r in create_requests],
                 )
-                return resp.get("values") or []
+                self._batch_update(create_requests)
+                meta = self._fetch_meta()
+                existing = {
+                    s["properties"]["title"]: s["properties"]
+                    for s in meta.get("sheets", [])
+                }
 
-            existing = retry_call(_read_a1, attempts=3, exceptions=(HttpError, TimeoutError))
-            if not existing:
-                logger.info("Writing headers to sheet '%s'", self._tab)
+            # 2. Reorder so the three managed tabs sit at indices 0, 1, 2.
+            move_requests: list[dict] = []
+            for desired_index, tab in enumerate(TAB_ORDER):
+                props = existing.get(tab)
+                if props is None:
+                    continue
+                if props.get("index") != desired_index:
+                    move_requests.append(
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": props["sheetId"],
+                                    "index": desired_index,
+                                },
+                                "fields": "index",
+                            }
+                        }
+                    )
+            if move_requests:
+                logger.info("Reordering tabs to canonical order.")
+                try:
+                    self._batch_update(move_requests)
+                except Exception:
+                    # Reordering can race with creation timestamps; non-fatal.
+                    logger.debug("Tab reorder failed; will retry next boot.", exc_info=True)
 
-                def _write_headers() -> None:
-                    self._svc.spreadsheets().values().update(
-                        spreadsheetId=self._sheet_id,
-                        range=f"'{self._tab}'!A1",
-                        valueInputOption="RAW",
-                        body={"values": [HEADERS]},
-                    ).execute()
+            # 3. Header row in every tab.
+            for tab in TAB_ORDER:
+                self._ensure_header_row(tab)
 
-                retry_call(_write_headers, attempts=3, exceptions=(HttpError, TimeoutError))
+            # 4. Header styling (bold + frozen + light grey).
+            self._style_headers()
 
-            self._headers_ready = True
+            self._tabs_ready = True
 
-    def _ensure_tab_exists(self) -> None:
-        def _meta() -> dict:
+    def _fetch_meta(self) -> dict:
+        def _call() -> dict:
             return (
                 self._svc.spreadsheets()
                 .get(spreadsheetId=self._sheet_id)
                 .execute()
             )
 
-        meta = retry_call(_meta, attempts=3, exceptions=(HttpError, TimeoutError))
-        existing_titles = {
-            s["properties"]["title"] for s in meta.get("sheets", [])
-        }
-        if self._tab in existing_titles:
-            return
+        return retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
 
-        logger.info("Creating sheet tab '%s'", self._tab)
-
-        def _add_tab() -> None:
+    def _batch_update(self, requests: list[dict]) -> None:
+        def _call() -> None:
             self._svc.spreadsheets().batchUpdate(
                 spreadsheetId=self._sheet_id,
-                body={
-                    "requests": [
-                        {
-                            "addSheet": {
-                                "properties": {"title": self._tab}
-                            }
-                        }
-                    ]
-                },
+                body={"requests": requests},
             ).execute()
 
-        retry_call(_add_tab, attempts=3, exceptions=(HttpError, TimeoutError))
+        retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
+
+    def _ensure_header_row(self, tab: str) -> None:
+        rng = f"'{tab}'!A1:I1"
+
+        def _read() -> list:
+            resp = (
+                self._svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=self._sheet_id, range=rng)
+                .execute()
+            )
+            return resp.get("values") or []
+
+        rows = retry_call(_read, attempts=3, exceptions=(HttpError, TimeoutError))
+        if rows and rows[0] == HEADERS:
+            return  # already correct
+
+        logger.info("Writing header row to tab %r", tab)
+
+        def _write() -> None:
+            self._svc.spreadsheets().values().update(
+                spreadsheetId=self._sheet_id,
+                range=rng,
+                valueInputOption="RAW",
+                body={"values": [HEADERS]},
+            ).execute()
+
+        retry_call(_write, attempts=3, exceptions=(HttpError, TimeoutError))
+
+    def _style_headers(self) -> None:
+        """Bold + frozen + light-grey-fill row 1 across all 3 tabs."""
+        meta = self._fetch_meta()
+        title_to_id = {
+            s["properties"]["title"]: s["properties"]["sheetId"]
+            for s in meta.get("sheets", [])
+        }
+        requests: list[dict] = []
+        for tab in TAB_ORDER:
+            sheet_id = title_to_id.get(tab)
+            if sheet_id is None:
+                continue
+            requests.extend(
+                [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 0,
+                                "endRowIndex": 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": len(HEADERS),
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "textFormat": {"bold": True},
+                                    "backgroundColor": {
+                                        "red": 0.92, "green": 0.92, "blue": 0.92
+                                    },
+                                }
+                            },
+                            "fields": "userEnteredFormat(textFormat,backgroundColor)",
+                        }
+                    },
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "gridProperties": {"frozenRowCount": 1},
+                            },
+                            "fields": "gridProperties.frozenRowCount",
+                        }
+                    },
+                ]
+            )
+        if requests:
+            try:
+                self._batch_update(requests)
+            except Exception:
+                # Cosmetic — never fatal.
+                logger.debug("Could not apply header styling.", exc_info=True)
 
     # --- appends -------------------------------------------------------------
 
-    def append_rows(self, rows: list[list[str]]) -> Optional[int]:
+    def append_rows(self, tab: str, rows: list[list[str]]) -> Optional[int]:
         """
-        Append `rows` to the sheet. Returns the 1-based row number where
-        the FIRST appended row landed (so callers can store mapping back
-        to local task ids).
+        Append `rows` to `tab`. Returns the 1-based row number where the
+        FIRST appended row landed (so the caller can map task ids back).
         """
         if not rows:
             return None
-        self.ensure_headers()
+        self.ensure_tabs()
 
         def _call() -> dict:
             return (
@@ -128,7 +260,7 @@ class SheetsClient:
                 .values()
                 .append(
                     spreadsheetId=self._sheet_id,
-                    range=f"'{self._tab}'!A1",
+                    range=f"'{tab}'!A1",
                     valueInputOption="USER_ENTERED",
                     insertDataOption="INSERT_ROWS",
                     body={"values": rows},
@@ -137,8 +269,6 @@ class SheetsClient:
             )
 
         resp = retry_call(_call, attempts=4, exceptions=(HttpError, TimeoutError))
-
-        # `updates.updatedRange` looks like "Tasks!A57:I59" — parse the start row.
         updated_range = (resp.get("updates") or {}).get("updatedRange")
         first_row: Optional[int] = None
         if updated_range and "!" in updated_range:
@@ -149,24 +279,22 @@ class SheetsClient:
                 first_row = int(digits)
 
         logger.info(
-            "Appended %d row(s) to sheet '%s' starting at row %s",
+            "Appended %d row(s) to tab %r starting at row %s",
             len(rows),
-            self._tab,
+            tab,
             first_row,
         )
         return first_row
 
-    # --- mutations -----------------------------------------------------------
-
-    def update_status(self, row_number: int, status: str) -> None:
-        """Update column H (Status) of the given 1-based row."""
+    def update_status(self, tab: str, row_number: int, status: str) -> None:
+        """Update column C (Status) of the given 1-based row."""
         if row_number is None or row_number < 2:
             return
 
         def _call() -> None:
             self._svc.spreadsheets().values().update(
                 spreadsheetId=self._sheet_id,
-                range=f"'{self._tab}'!H{row_number}",
+                range=f"'{tab}'!C{row_number}",
                 valueInputOption="RAW",
                 body={"values": [[status]]},
             ).execute()
@@ -175,13 +303,13 @@ class SheetsClient:
 
 
 _singleton: Optional[SheetsClient] = None
-_lock = threading.Lock()
+_singleton_lock = threading.Lock()
 
 
 def get_sheets_client() -> SheetsClient:
     global _singleton
     if _singleton is None:
-        with _lock:
+        with _singleton_lock:
             if _singleton is None:
                 _singleton = SheetsClient()
     return _singleton

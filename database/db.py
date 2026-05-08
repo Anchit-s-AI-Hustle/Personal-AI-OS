@@ -42,6 +42,30 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Idempotent column-level migration.
+
+    SQLite's CREATE TABLE IF NOT EXISTS won't add columns to a pre-existing
+    table, so we explicitly inspect the schema and ALTER TABLE for any new
+    columns the rest of the code now expects.
+    """
+    cur = conn.execute("PRAGMA table_info(extracted_tasks)")
+    existing = {row[1] for row in cur.fetchall()}
+
+    additions = [
+        ("task_description", "TEXT"),
+        ("rationale",        "TEXT"),
+        ("growth_pillar",    "TEXT"),
+        ("sheet_row_source", "INTEGER"),
+        ("sheet_row_all",    "INTEGER"),
+    ]
+    for col, col_type in additions:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE extracted_tasks ADD COLUMN {col} {col_type}")
+            logger.info("Migrated extracted_tasks: added column %s", col)
+
+
 def _init_schema() -> None:
     global _initialised
     with _init_lock:
@@ -52,6 +76,7 @@ def _init_schema() -> None:
         conn = _connect()
         try:
             conn.executescript(sql)
+            _migrate(conn)
         finally:
             conn.close()
         logger.info("Database schema ready at %s", settings.database_path)
@@ -254,6 +279,9 @@ class Database:
         urgency: str,
         sender_or_speaker: Optional[str],
         summary: Optional[str],
+        task_description: Optional[str] = None,
+        rationale: Optional[str] = None,
+        growth_pillar: Optional[str] = None,
     ) -> Optional[int]:
         """Returns the inserted row id, or None if it was a duplicate."""
         dedupe_hash = self.make_task_dedupe_hash(source_type, source_ref_id, task)
@@ -261,15 +289,19 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO extracted_tasks(
-                    source_type, source_ref_id, task, deadline, urgency,
-                    sender_or_speaker, summary, status, created_at, dedupe_hash
+                    source_type, source_ref_id, task, task_description, rationale,
+                    growth_pillar, deadline, urgency, sender_or_speaker, summary,
+                    status, created_at, dedupe_hash
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
                 (
                     source_type,
                     source_ref_id,
                     task,
+                    task_description,
+                    rationale,
+                    growth_pillar,
                     deadline,
                     urgency,
                     sender_or_speaker,
@@ -283,7 +315,8 @@ class Database:
     def unsynced_tasks(self, limit: int = 100) -> list[sqlite3.Row]:
         return self.fetchall(
             """
-            SELECT id, source_type, source_ref_id, task, deadline, urgency,
+            SELECT id, source_type, source_ref_id, task, task_description,
+                   rationale, growth_pillar, deadline, urgency,
                    sender_or_speaker, summary, status, created_at
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
@@ -293,21 +326,38 @@ class Database:
             (limit,),
         )
 
-    def mark_tasks_synced(self, task_ids: Iterable[int], starting_row: Optional[int] = None) -> None:
+    def mark_tasks_synced(
+        self,
+        task_ids: Iterable[int],
+        *,
+        all_tasks_starting_row: Optional[int] = None,
+        source_starting_row: Optional[int] = None,
+    ) -> None:
+        """
+        Mark tasks as synced. If row numbers are provided, persist them so we
+        can later update status across both tabs without re-finding rows.
+
+        `task_ids` is iterated IN ORDER — both starting_row args, if given,
+        are interpreted as the row of the FIRST id, and incremented for each
+        subsequent id. Pass None to skip storing that mapping.
+        """
         ids = list(task_ids)
         if not ids:
             return
         with self.transaction() as conn:
-            if starting_row is None:
-                conn.executemany(
-                    "UPDATE extracted_tasks SET synced_to_sheets = 1 WHERE id = ?",
-                    [(i,) for i in ids],
-                )
-            else:
-                rows = [(starting_row + idx, i) for idx, i in enumerate(ids)]
-                conn.executemany(
-                    "UPDATE extracted_tasks SET synced_to_sheets = 1, sheet_row = ? WHERE id = ?",
-                    rows,
+            for idx, task_id in enumerate(ids):
+                sets = ["synced_to_sheets = 1"]
+                params: list[Any] = []
+                if all_tasks_starting_row is not None:
+                    sets.append("sheet_row_all = ?")
+                    params.append(all_tasks_starting_row + idx)
+                if source_starting_row is not None:
+                    sets.append("sheet_row_source = ?")
+                    params.append(source_starting_row + idx)
+                params.append(task_id)
+                conn.execute(
+                    f"UPDATE extracted_tasks SET {', '.join(sets)} WHERE id = ?",
+                    tuple(params),
                 )
 
     def update_task_status(self, task_id: int, status: str) -> None:
