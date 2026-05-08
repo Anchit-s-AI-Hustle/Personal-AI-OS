@@ -27,6 +27,8 @@ from config import settings
 from utils.logger import get_logger
 from utils.retry import retry_call
 
+from .errors import QuotaExhaustedError
+
 logger = get_logger(__name__)
 
 # Stay safely under the free tier's 15 RPM ceiling. This is also a soft
@@ -40,10 +42,6 @@ _QUOTA_PAUSE_SECONDS = 60 * 60  # 1 hour
 # Match the "limit: 0" pattern in the 429 body — signature of a
 # Workspace-account key with no free tier.
 _QUOTA_ZERO_RE = re.compile(r"limit:\s*0\b", re.IGNORECASE)
-
-
-class QuotaExhaustedError(RuntimeError):
-    """Raised when the Gemini key has zero quota — non-retryable."""
 
 
 def _is_transient_genai_error(exc: BaseException) -> bool:
@@ -158,7 +156,7 @@ _singleton: Optional[GeminiClient] = None
 _singleton_lock = threading.Lock()
 
 
-def get_llm_client() -> GeminiClient:
+def get_gemini_client() -> GeminiClient:
     global _singleton
     if _singleton is None:
         with _singleton_lock:

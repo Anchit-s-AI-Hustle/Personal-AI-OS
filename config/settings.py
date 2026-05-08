@@ -54,9 +54,16 @@ def _resolve_path(raw: Optional[str], default_relative: str) -> Path:
 
 @dataclass(frozen=True)
 class Settings:
-    # LLM (Google Gemini)
-    llm_api_key: str
+    # LLM provider selector
+    llm_provider: str   # "gemini" | "groq"
+
+    # Gemini-specific (always populated; ignored if provider != gemini)
+    llm_api_key: str    # alias for gemini_api_key, kept for backward compat
     llm_model: str
+
+    # Groq-specific
+    groq_api_key: str
+    groq_model: str
 
     # Google Sheets
     google_sheet_id: str
@@ -129,11 +136,26 @@ class Settings:
 
 
 def _load() -> Settings:
-    api_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")
-    if not api_key:
+    provider = (_env("LLM_PROVIDER", "gemini") or "gemini").strip().lower()
+    if provider not in ("gemini", "groq"):
         raise RuntimeError(
-            "GEMINI_API_KEY is missing. Copy .env.example to .env and fill it in. "
-            "Get a key at https://aistudio.google.com/apikey"
+            f"LLM_PROVIDER must be 'gemini' or 'groq', got {provider!r}."
+        )
+
+    gemini_api_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY") or ""
+    groq_api_key = _env("GROQ_API_KEY") or ""
+
+    # Validate the key for the SELECTED provider only.
+    if provider == "gemini" and not gemini_api_key:
+        raise RuntimeError(
+            "LLM_PROVIDER=gemini but GEMINI_API_KEY is missing in .env. "
+            "Get a key at https://aistudio.google.com/apikey "
+            "(use a personal Google account — Workspace accounts get limit:0)."
+        )
+    if provider == "groq" and not groq_api_key:
+        raise RuntimeError(
+            "LLM_PROVIDER=groq but GROQ_API_KEY is missing in .env. "
+            "Get a key at https://console.groq.com/keys (free tier, no Workspace restriction)."
         )
 
     sheet_id = _env("GOOGLE_SHEET_ID")
@@ -152,8 +174,11 @@ def _load() -> Settings:
             creds_path = legacy
 
     return Settings(
-        llm_api_key=api_key,
+        llm_provider=provider,
+        llm_api_key=gemini_api_key,
         llm_model=_env("GEMINI_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash",
+        groq_api_key=groq_api_key,
+        groq_model=_env("GROQ_MODEL", "llama-3.3-70b-versatile") or "llama-3.3-70b-versatile",
         google_sheet_id=sheet_id,
         google_sheet_tab=_env("GOOGLE_SHEET_TAB", "Tasks") or "Tasks",
         polling_interval=_env_int("POLLING_INTERVAL", 30),

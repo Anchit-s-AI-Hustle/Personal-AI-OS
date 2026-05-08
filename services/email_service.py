@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ai import get_extractor
-from ai.gemini_client import QuotaExhaustedError
+from ai import QuotaExhaustedError
 from database import get_db
 from gmail.client import GmailMessage, get_gmail_client
 from utils.logger import get_logger

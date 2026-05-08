@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from ai.gemini_client import QuotaExhaustedError
+from ai import QuotaExhaustedError
 from config import settings
 from database import get_db
 from utils.logger import get_logger

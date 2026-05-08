@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ai import get_extractor
-from ai.gemini_client import QuotaExhaustedError
+from ai import QuotaExhaustedError
 from chat.client import ChatMessage
 from database import get_db
 from utils.logger import get_logger

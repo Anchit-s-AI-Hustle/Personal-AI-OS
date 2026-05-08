@@ -1,8 +1,9 @@
 # --- Core ---
 python-dotenv>=1.0.1
 
-# --- Google Gemini ---
+# --- LLM providers (pick one via LLM_PROVIDER in .env) ---
 google-genai>=0.3.0
+groq>=0.11.0
 
 # --- Google APIs (Gmail + Sheets) ---
 google-api-python-client>=2.149.0

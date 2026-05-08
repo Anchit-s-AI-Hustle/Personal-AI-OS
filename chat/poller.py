@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from googleapiclient.errors import HttpError
 
-from ai.gemini_client import QuotaExhaustedError
+from ai import QuotaExhaustedError
 from config import settings
 from database import get_db
 from utils.logger import get_logger
