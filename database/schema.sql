@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS extracted_tasks (
     synced_to_sheets    INTEGER NOT NULL DEFAULT 0,
     sheet_row           INTEGER,         -- legacy single-tab row
     sheet_row_source    INTEGER,         -- row in source-specific tab
-    sheet_row_all       INTEGER,         -- row in 'All Tasks' tab
+    sheet_row_all       INTEGER,         -- row in the 'Master Task List' tab
     dedupe_hash         TEXT NOT NULL UNIQUE
 );
 

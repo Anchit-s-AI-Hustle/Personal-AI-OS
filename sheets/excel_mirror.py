@@ -30,7 +30,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 from config import settings
 from utils.logger import get_logger
 
-from .client import HEADERS, LEGACY_SCHEMAS, TAB_ORDER
+from .client import HEADERS, LEGACY_SCHEMAS, LEGACY_TAB_RENAMES, TAB_ORDER
 
 logger = get_logger(__name__)
 
@@ -142,8 +142,22 @@ class ExcelMirror:
                 except PermissionError:
                     return
 
-            # Add any missing managed tabs.
             mutated = False
+
+            # Rename legacy worksheet titles in place so existing rows are
+            # preserved across the rename. Skip if the new name already
+            # exists (manual migration / prior boot already did it).
+            for old, new in LEGACY_TAB_RENAMES.items():
+                if old == new:
+                    continue
+                if old in wb.sheetnames and new not in wb.sheetnames:
+                    logger.info(
+                        "Excel mirror: renaming legacy tab %r -> %r", old, new
+                    )
+                    wb[old].title = new
+                    mutated = True
+
+            # Add any missing managed tabs.
             for tab in TAB_ORDER:
                 if tab not in wb.sheetnames:
                     self._add_tab(wb, tab)

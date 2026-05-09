@@ -2,10 +2,10 @@
 Google Sheets API client.
 
 Maintains four tabs in a fixed order:
-    1. All Tasks               (master — every task across every source)
-    2. Tasks From Discussions  (meetings / voice memos / Google Chat)
-    3. Tasks From Mails        (Gmail-derived)
-    4. Tasks From WhatsApp     (WhatsApp-derived; ingestion bridge TBD)
+    1. Master Task List              (every task across every source)
+    2. Tasks from Gmail              (emails + Google Chat DMs/Spaces/Groups)
+    3. Tasks from WhatsApp           (WhatsApp chat exports)
+    4. Tasks from In-Person Discussions  (meetings / voice memos / live calls)
 
 Every task gets dual-written: one row in its source-specific tab and
 one row in "All Tasks". The local DB stores both row numbers so future
@@ -43,16 +43,29 @@ logger = get_logger(__name__)
 
 
 # Tab names — order matters; this is the order they're created/positioned.
-TAB_ALL_TASKS = "All Tasks"
-TAB_FROM_DISCUSSIONS = "Tasks From Discussions"
-TAB_FROM_MAILS = "Tasks From Mails"
-TAB_FROM_WHATSAPP = "Tasks From WhatsApp"
+TAB_ALL_TASKS = "Master Task List"
+TAB_FROM_GMAIL = "Tasks from Gmail"
+TAB_FROM_WHATSAPP = "Tasks from WhatsApp"
+TAB_FROM_DISCUSSIONS = "Tasks from In-Person Discussions"
 TAB_ORDER: tuple[str, ...] = (
     TAB_ALL_TASKS,
-    TAB_FROM_DISCUSSIONS,
-    TAB_FROM_MAILS,
+    TAB_FROM_GMAIL,
     TAB_FROM_WHATSAPP,
+    TAB_FROM_DISCUSSIONS,
 )
+
+# Backward-compat alias so older imports (TAB_FROM_MAILS) keep working.
+TAB_FROM_MAILS = TAB_FROM_GMAIL
+
+# Legacy tab names that should be RENAMED IN PLACE on next bootstrap so
+# existing rows aren't lost. Order: oldest -> newest. Applied first in
+# ensure_tabs(), before the missing-tab / reorder logic runs.
+LEGACY_TAB_RENAMES: dict[str, str] = {
+    "All Tasks":                TAB_ALL_TASKS,
+    "Tasks From Mails":         TAB_FROM_GMAIL,
+    "Tasks From WhatsApp":      TAB_FROM_WHATSAPP,
+    "Tasks From Discussions":   TAB_FROM_DISCUSSIONS,
+}
 
 
 HEADERS: list[str] = [
@@ -130,13 +143,21 @@ def _col_letter(n: int) -> str:
 
 
 def source_tab_for(source_type: str) -> str:
-    """Map a task's source_type to its dedicated tab."""
+    """
+    Map a task's source_type to its dedicated tab.
+
+    Tab routing:
+      - Email + Google Chat (DMs/Spaces/Groups) -> "Tasks from Gmail"
+        (Workspace lumps them together; the user wants them in one tab.)
+      - WhatsApp                                -> "Tasks from WhatsApp"
+      - Meeting / Conversation / anything else  -> "Tasks from In-Person
+                                                    Discussions" (live audio).
+    """
     s = (source_type or "").lower()
-    if s == "email":
-        return TAB_FROM_MAILS
+    if s in ("email", "chat"):
+        return TAB_FROM_GMAIL
     if s == "whatsapp":
         return TAB_FROM_WHATSAPP
-    # Meeting / Chat / Conversation / anything else -> Discussions.
     return TAB_FROM_DISCUSSIONS
 
 
@@ -154,6 +175,11 @@ class SheetsClient:
         """
         Idempotent: create any missing tab in the right order, write headers
         to anything that doesn't have them yet.
+
+        Step 0 — rename legacy tab names to current names so existing rows
+        are preserved across the rename. Applied BEFORE the create/missing
+        logic so we don't accidentally create a duplicate empty tab next
+        to the legacy one.
         """
         with self._lock:
             if self._tabs_ready:
@@ -164,6 +190,44 @@ class SheetsClient:
                 s["properties"]["title"]: s["properties"]
                 for s in meta.get("sheets", [])
             }
+
+            # 0. Rename legacy tabs in place. Skip a rename when the new
+            #    name already exists (means a prior boot already migrated
+            #    or the user manually created the new tab) — leave the
+            #    legacy tab alone so manual cleanup is possible.
+            rename_requests: list[dict] = []
+            for old, new in LEGACY_TAB_RENAMES.items():
+                if old == new:
+                    continue
+                if old in existing and new not in existing:
+                    rename_requests.append(
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": existing[old]["sheetId"],
+                                    "title": new,
+                                },
+                                "fields": "title",
+                            }
+                        }
+                    )
+            if rename_requests:
+                logger.info(
+                    "Renaming legacy tab(s): %s",
+                    [r["updateSheetProperties"]["properties"]["title"]
+                     for r in rename_requests],
+                )
+                try:
+                    self._batch_update(rename_requests)
+                except Exception:
+                    logger.exception(
+                        "Could not rename legacy tabs; will retry next boot."
+                    )
+                meta = self._fetch_meta()
+                existing = {
+                    s["properties"]["title"]: s["properties"]
+                    for s in meta.get("sheets", [])
+                }
 
             # 1. Create any missing tabs.
             create_requests: list[dict] = []
