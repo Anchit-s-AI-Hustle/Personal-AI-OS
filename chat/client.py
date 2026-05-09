@@ -134,16 +134,17 @@ class ChatClient:
 
     def to_chat_message(self, raw: dict, space_meta: dict) -> ChatMessage:
         sender = raw.get("sender") or {}
-        sender_name = sender.get("name") or ""
-        # `sender_name` looks like 'users/USER_ID'. Display name is in
-        # `sender.displayName` (often present for human users).
-        sender_display = (
-            sender.get("displayName")
-            or sender_name
-            or "(unknown)"
-        )
-        # Email is rarely populated in Chat responses — we fall back to display.
-        sender_email = sender.get("domainId") or ""
+        # `sender.name` looks like 'users/USER_ID' — that's an internal
+        # resource path, NOT a name. Use ONLY `displayName` as the human
+        # label; if it's missing, leave sender_display empty so downstream
+        # code knows we don't have a real name. Never leak the raw
+        # resource path into the sheet.
+        display = (sender.get("displayName") or "").strip()
+        sender_display = display  # may be empty by design
+        # Email is rarely populated in Chat responses; only keep it if
+        # it actually looks like an email.
+        raw_email = (sender.get("email") or "").strip()
+        sender_email = raw_email if "@" in raw_email else ""
 
         return ChatMessage(
             name=raw.get("name", ""),

@@ -13,6 +13,7 @@ from typing import Iterable, Optional
 from database import get_db
 from database.models import ExtractedTask
 from transcription.lexicon import correct_names
+from utils.identifiers import clean_identifier
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -176,12 +177,19 @@ class TaskService:
                 continue
             description = correct_names(task.task_description or "")
             rationale = correct_names(task.rationale or "")
-            spoc = correct_names(task.sender_or_speaker or default_speaker or "") or None
+            # SPOC must be a real human name — never an opaque API id
+            # ("users/12345"), never "(unknown)", never blank-ish junk.
+            # If the LLM (or upstream chat client) couldn't find a real
+            # name, leave SPOC empty rather than poisoning the column.
+            raw_spoc = correct_names(task.sender_or_speaker or default_speaker or "")
+            spoc = clean_identifier(raw_spoc)
             # Per-task contact (from the LLM) wins; fall back to the
-            # source-level contact (e.g. email sender). Guarantees the
-            # SPOC Contact column is non-blank whenever we have any way
-            # of reaching the SPOC.
-            contact = (task.owner_contact or "").strip() or spoc_contact or None
+            # source-level contact (e.g. email sender). Anything that
+            # doesn't look like a real email/phone is dropped.
+            contact = (
+                clean_identifier(task.owner_contact)
+                or clean_identifier(spoc_contact)
+            )
             row_id = self._db.insert_task(
                 source_type=source_type,
                 source_ref_id=source_ref_id,

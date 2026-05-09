@@ -19,6 +19,7 @@ from ai import QuotaExhaustedError, get_extractor
 from chat.client import ChatMessage
 from config import settings
 from database import get_db
+from utils.identifiers import clean_identifier, is_placeholder_identifier
 from utils.logger import get_logger
 
 from .task_service import TaskService
@@ -40,8 +41,9 @@ _partner_lock = threading.Lock()
 
 def _dm_partner_label(space_name: str, msg: ChatMessage) -> Optional[str]:
     """
-    For a DM, figure out the other person's display name.
-    Falls back to None when we don't know yet.
+    For a DM, figure out the other person's display name. Falls back to
+    None when we genuinely don't know — we never surface raw `users/...`
+    resource IDs in the Source column.
     """
     if not space_name:
         return None
@@ -50,17 +52,16 @@ def _dm_partner_label(space_name: str, msg: ChatMessage) -> Optional[str]:
     if cached:
         return cached
 
-    # If THIS message is from the partner (not self), we just learned them.
+    # If THIS message is from the partner (not self), we may have just
+    # learned their displayName.
     sender = msg.raw.get("sender") or {} if isinstance(msg.raw, dict) else {}
     sender_id = sender.get("name") or ""
     if sender_id and not _is_self(sender_id):
-        partner_label = (
-            sender.get("displayName")
-            or sender_id  # fall back to the user id; better than nothing
-        )
-        with _partner_lock:
-            _partner_cache[space_name] = partner_label
-        return partner_label
+        partner_label = clean_identifier(sender.get("displayName"))
+        if partner_label:
+            with _partner_lock:
+                _partner_cache[space_name] = partner_label
+            return partner_label
     return None
 
 
@@ -103,16 +104,20 @@ def _compute_source_link(msg: ChatMessage) -> Optional[str]:
     return f"https://mail.google.com/chat/u/0/#chat/{path}/{bare}"
 
 
-def _resolve_sender_label(msg: ChatMessage) -> str:
-    """Display label for the message sender ('Anchit (Self)' for self)."""
+def _resolve_sender_label(msg: ChatMessage) -> Optional[str]:
+    """
+    Display label for the message sender ('Anchit (Self)' for self).
+    Returns None when the sender is genuinely unknown — we never fall
+    back to the raw `users/...` resource path or "(unknown)" since
+    those would leak into the SPOC column as junk identifiers.
+    """
     sender_block = msg.raw.get("sender") if isinstance(msg.raw, dict) else None
     sender_id = ""
     if isinstance(sender_block, dict):
         sender_id = sender_block.get("name") or ""
     if _is_self(sender_id):
         return settings.self_display_name
-    # Otherwise prefer the displayName chat_client already extracted.
-    return msg.sender_display or sender_id or "(unknown)"
+    return clean_identifier(msg.sender_display)
 
 
 class ChatService:
@@ -129,6 +134,10 @@ class ChatService:
         source_detail = _compute_source_detail(msg)
         source_link = _compute_source_link(msg)
         is_from_self = sender_label == settings.self_display_name
+        # For prompt framing (LLM sees this), keep a human-readable string
+        # but never expose raw resource IDs. For DB persistence, we still
+        # store None when unknown so the sheet doesn't show junk.
+        sender_label_for_prompt = sender_label or "an unidentified colleague"
 
         # Frame the prompt so the LLM understands the role.
         if is_from_self:
@@ -142,15 +151,17 @@ class ChatService:
             )
         else:
             framing = (
-                f"This message is in a {source_detail}, sent by {sender_label}. "
+                f"This message is in a {source_detail}, sent by {sender_label_for_prompt}. "
                 f"Anything they're asking Anchit (the user) to do is a TASK for "
                 f"Anchit (set owner to {settings.self_display_name!r}). Anything "
-                f"they're committing to is a TASK for them (owner = sender)."
+                f"they're committing to is a TASK for them (owner = sender). "
+                f"If you don't know the sender's real name, set owner to null — "
+                f"DO NOT make up a placeholder name or identifier."
             )
         wrapped = (
             f"{framing}\n\n"
             f"--- Chat message ({msg.create_time}) ---\n"
-            f"From: {sender_label}\n"
+            f"From: {sender_label_for_prompt}\n"
             f"Where: {source_detail}\n\n"
             f"{msg.text}"
         )
@@ -179,19 +190,20 @@ class ChatService:
         if extraction.tasks:
             n_tasks = self._tasks.save_chat_tasks(
                 chat_message_id=msg.message_id,
-                sender=sender_label,
+                sender=sender_label,  # may be None if unknown — TaskService tolerates
                 chat_summary=extraction.summary,
                 tasks=extraction.tasks,
                 source_detail=source_detail,
                 source_link=source_link,
                 sent_at=msg.create_time,
+                sender_contact=clean_identifier(msg.sender_email),
             )
 
         self._db.record_processed_email(
             gmail_message_id=msg.message_id,
             thread_id=msg.thread_name,
             subject=f"Chat / {source_detail}",
-            sender=sender_label,
+            sender=sender_label or "(sender unknown)",  # log only — not the sheet
             received_at=msg.create_time,
             summary=extraction.summary,
             status="processed" if n_tasks else "skipped",
@@ -200,6 +212,6 @@ class ChatService:
             "Chat msg %s [%s, sender=%s]: %d task(s).",
             msg.message_id,
             source_detail,
-            sender_label,
+            sender_label or "<unknown>",
             n_tasks,
         )

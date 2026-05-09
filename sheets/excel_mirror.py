@@ -49,7 +49,7 @@ def _column_widths() -> dict[str, int]:
         "C": 12,  # Status
         "D": 28,  # Source (Email | Chat | Meeting + detail)
         "E": 32,  # Source Link
-        "F": 22,  # Task Given At
+        "F": 22,  # Task Given On
         "G": 50,  # Why We're Doing This
         "H": 18,  # Growth Pillar
         "I": 22,  # SPOC

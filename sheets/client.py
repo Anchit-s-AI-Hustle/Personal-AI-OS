@@ -17,7 +17,7 @@ Column layout (identical in all four tabs):
     C  Status               (open | done | dropped)
     D  Source               (e.g. "Email | from Aman <aman@vahdam.com>")
     E  Source Link          (deep-link to the originating message/thread/session)
-    F  Task Given At        (ISO 8601 — when the task was assigned/discussed)
+    F  Task Given On        (ISO 8601 — date+time the task was assigned/discussed)
     G  Why We're Doing This (the rationale / business reason)
     H  Growth Pillar        (Operations | Retention | Acquisition | ... | Other)
     I  SPOC                 (the person responsible — sender or speaker)
@@ -74,7 +74,7 @@ HEADERS: list[str] = [
     "Status",             # C
     "Source",             # D
     "Source Link",        # E
-    "Task Given At",      # F  (renamed from "Date Given")
+    "Task Given On",      # F  (renamed from "Date Given" -> "Task Given At" -> "Task Given On")
     "Why We're Doing This",  # G
     "Growth Pillar",      # H
     "SPOC",               # I
@@ -122,6 +122,16 @@ LEGACY_SCHEMAS: list[tuple[list[str], list[int]]] = [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Date Given", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Go Live", "Remarks",
+        ],
+        [],
+    ),
+    # 13-col schema with intermediate "Task Given At" header text. Same
+    # column positions as current; just rewrite the header.
+    (
+        [
+            "Task Heading", "Task Description", "Status", "Source", "Source Link",
+            "Task Given At", "Why We're Doing This", "Growth Pillar", "SPOC",
+            "SPOC Contact", "Priority", "Task Deadline", "Remarks",
         ],
         [],
     ),

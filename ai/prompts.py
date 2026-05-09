@@ -29,6 +29,14 @@ USER_CONTEXT = dedent(
       If a task obviously belongs to one of them, set "owner" / SPOC to
       their name verbatim.
 
+    NEVER emit placeholder identifiers as if they were real names. The
+    sheet must only show real human names, real email addresses, and
+    real phone numbers. If you only have an opaque ID — anything that
+    looks like "users/12345...", "user-abc-123", "U02ABC3", a bare
+    UUID, or "(unknown)" — set the relevant field (owner / owner_contact)
+    to null instead. A null is fine; a fake name poisons the SPOC
+    column.
+
     NAME CANONICALISATION (important for transcribed audio):
     The transcription may have misheard names. If you encounter any of
     these spellings, normalise them:
