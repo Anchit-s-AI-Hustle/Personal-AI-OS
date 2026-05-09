@@ -117,12 +117,17 @@ class GroqClient:
                 raise RuntimeError("Groq returned empty response")
             return text
 
+        # QuotaExhaustedError is a subclass of RuntimeError, so it would
+        # otherwise be caught by the retry. Skip retry on it explicitly —
+        # the caller (services.meeting_service / email_service) handles
+        # quota by halting the current batch.
         return retry_call(
             _call,
             attempts=4,
             base=2.0,
             max_wait=30.0,
             exceptions=(*_RETRYABLE, RuntimeError),
+            should_retry=lambda exc: not isinstance(exc, QuotaExhaustedError),
         )
 
 

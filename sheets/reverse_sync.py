@@ -144,19 +144,39 @@ class ReverseSyncWorker(threading.Thread):
         max_row = max(r["sheet_row_all"] for r in rows)
         rng = f"'{TAB_ALL_TASKS}'!{STATUS_COL_LETTER}2:{STATUS_COL_LETTER}{max_row}"
 
-        try:
-            def _read() -> list:
-                resp = (
-                    self._client._svc.spreadsheets()  # noqa: SLF001
-                    .values()
-                    .get(spreadsheetId=settings.google_sheet_id, range=rng)
-                    .execute()
-                )
-                return resp.get("values") or []
+        def _read() -> list:
+            resp = (
+                self._client._svc.spreadsheets()  # noqa: SLF001
+                .values()
+                .get(spreadsheetId=settings.google_sheet_id, range=rng)
+                .execute()
+            )
+            return resp.get("values") or []
 
+        try:
             values = retry_call(
                 _read, attempts=3, exceptions=(HttpError, TimeoutError)
             )
+        except HttpError as exc:
+            # 400 "Unable to parse range" means the tab name in our
+            # constant doesn't exist on the live Sheet (e.g. the user
+            # renamed/deleted it, or this Python process is still
+            # holding a stale TAB_ALL_TASKS value because main.py was
+            # started before a tab-rename migration). Logging "exception"
+            # for this would spew a huge traceback every minute. Treat
+            # it as a soft skip with a one-line warning.
+            status = getattr(exc.resp, "status", None) if exc.resp else None
+            if status in (400, 404):
+                logger.warning(
+                    "Reverse sync: cannot read %r — tab not found on the "
+                    "Sheet. Skipping this cycle. If you just renamed/created "
+                    "tabs, restart main.py so the new TAB_ALL_TASKS value "
+                    "is loaded.",
+                    f"{TAB_ALL_TASKS}!{STATUS_COL_LETTER}",
+                )
+                return 0
+            logger.exception("Reverse sync: HTTP error reading status column.")
+            return 0
         except Exception:
             logger.exception("Reverse sync: could not read status column.")
             return 0
