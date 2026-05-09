@@ -152,26 +152,42 @@ class Settings:
 
 
 def _load() -> Settings:
-    provider = (_env("LLM_PROVIDER", "gemini") or "gemini").strip().lower()
-    if provider not in ("gemini", "groq", "ollama"):
+    raw_provider = (_env("LLM_PROVIDER", "gemini") or "gemini").strip().lower()
+    # Accept a single provider OR a comma-separated priority chain.
+    # The chain is iterated left-to-right by RoutedClient on quota
+    # exhaustion. Validation: every name must be one of the three known
+    # providers, and the API key for any cloud provider in the chain
+    # must be configured.
+    provider_chain = [p.strip() for p in raw_provider.split(",") if p.strip()]
+    if not provider_chain:
+        raise RuntimeError("LLM_PROVIDER is empty.")
+    valid_providers = {"gemini", "groq", "ollama"}
+    unknown = [p for p in provider_chain if p not in valid_providers]
+    if unknown:
         raise RuntimeError(
-            f"LLM_PROVIDER must be 'gemini', 'groq', or 'ollama', got {provider!r}."
+            f"LLM_PROVIDER contains unknown provider(s) {unknown!r}. "
+            f"Valid: {sorted(valid_providers)}. "
+            f"Use a single name (e.g. 'gemini') or a chain (e.g. 'gemini,groq,ollama')."
         )
+    # `provider` retained as the canonical normalised string for the
+    # Settings dataclass; consumers split it themselves.
+    provider = ",".join(provider_chain)
 
     gemini_api_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY") or ""
     groq_api_key = _env("GROQ_API_KEY") or ""
 
-    # Validate the key for the SELECTED provider only. Ollama is local
-    # and needs no key — we just need a model name and host.
-    if provider == "gemini" and not gemini_api_key:
+    # Validate the key for any cloud provider that's anywhere in the
+    # chain (it might be the fallback, but we still need credentials
+    # ready for when it's needed). Ollama is local and needs no key.
+    if "gemini" in provider_chain and not gemini_api_key:
         raise RuntimeError(
-            "LLM_PROVIDER=gemini but GEMINI_API_KEY is missing in .env. "
+            "LLM_PROVIDER includes 'gemini' but GEMINI_API_KEY is missing in .env. "
             "Get a key at https://aistudio.google.com/apikey "
             "(use a personal Google account — Workspace accounts get limit:0)."
         )
-    if provider == "groq" and not groq_api_key:
+    if "groq" in provider_chain and not groq_api_key:
         raise RuntimeError(
-            "LLM_PROVIDER=groq but GROQ_API_KEY is missing in .env. "
+            "LLM_PROVIDER includes 'groq' but GROQ_API_KEY is missing in .env. "
             "Get a key at https://console.groq.com/keys (free tier, no Workspace restriction)."
         )
 

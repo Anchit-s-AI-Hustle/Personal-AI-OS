@@ -13,7 +13,6 @@ care which provider is active. Ollama is local and never raises this.
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
 from config import settings
 
@@ -24,8 +23,35 @@ _lock = threading.Lock()
 _cached_client = None
 
 
+def _build_single_client(provider: str):
+    if provider == "groq":
+        from .groq_client import get_groq_client
+        return get_groq_client()
+    if provider == "gemini":
+        from .gemini_client import get_gemini_client
+        return get_gemini_client()
+    if provider == "ollama":
+        from .ollama_client import get_ollama_client
+        return get_ollama_client()
+    raise RuntimeError(
+        f"Unknown LLM provider {provider!r}. "
+        f"Use 'gemini', 'groq', or 'ollama'."
+    )
+
+
 def get_llm_client():
-    """Return the configured LLM client (gemini | groq | ollama)."""
+    """
+    Return the configured LLM client.
+
+    `LLM_PROVIDER` may be:
+      - a single provider name           e.g. "gemini"
+      - a comma-separated priority chain e.g. "gemini,groq,ollama"
+
+    For a chain, returns a `RoutedClient` that tries providers
+    left-to-right, automatically falls back on quota exhaustion, and
+    automatically recovers when the higher-priority provider's pause
+    window elapses.
+    """
     global _cached_client
     if _cached_client is not None:
         return _cached_client
@@ -34,21 +60,16 @@ def get_llm_client():
         if _cached_client is not None:
             return _cached_client
 
-        provider = (settings.llm_provider or "gemini").strip().lower()
-        if provider == "groq":
-            from .groq_client import get_groq_client
-            _cached_client = get_groq_client()
-        elif provider == "gemini":
-            from .gemini_client import get_gemini_client
-            _cached_client = get_gemini_client()
-        elif provider == "ollama":
-            from .ollama_client import get_ollama_client
-            _cached_client = get_ollama_client()
+        raw = (settings.llm_provider or "gemini").strip().lower()
+        names = [p.strip() for p in raw.split(",") if p.strip()]
+
+        if len(names) == 1:
+            _cached_client = _build_single_client(names[0])
         else:
-            raise RuntimeError(
-                f"Unknown LLM_PROVIDER={provider!r}. "
-                f"Use 'gemini', 'groq', or 'ollama'."
-            )
+            from .routed_client import RoutedClient
+            chain = [(name, _build_single_client(name)) for name in names]
+            _cached_client = RoutedClient(chain)
+
         return _cached_client
 
 
