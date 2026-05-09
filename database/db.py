@@ -54,15 +54,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     existing = {row[1] for row in cur.fetchall()}
 
     additions = [
-        ("task_description", "TEXT"),
-        ("rationale",        "TEXT"),
-        ("growth_pillar",    "TEXT"),
-        ("sheet_row_source", "INTEGER"),
-        ("sheet_row_all",    "INTEGER"),
-        ("source_detail",    "TEXT"),    # human-readable origin label
-        ("source_link",      "TEXT"),    # direct URL to the original message
-        ("date_given",       "TEXT"),    # ISO 8601 — when the source was created
-        ("spoc_contact",     "TEXT"),    # email / phone if known, otherwise null
+        ("task_description",     "TEXT"),
+        ("rationale",            "TEXT"),
+        ("growth_pillar",        "TEXT"),
+        ("sheet_row_source",     "INTEGER"),
+        ("sheet_row_all",        "INTEGER"),
+        ("source_detail",        "TEXT"),  # human-readable origin label
+        ("source_link",          "TEXT"),  # direct URL to the original message
+        ("date_given",           "TEXT"),  # ISO 8601 — when the source was created
+        ("spoc_contact",         "TEXT"),  # email / phone if known, otherwise null
+        ("all_updates",          "TEXT"),  # newline-separated chronological updates
+        ("normalized_heading",   "TEXT"),  # used to merge duplicate task rows
     ]
     for col, col_type in additions:
         if col not in existing:
@@ -290,6 +292,7 @@ class Database:
         source_link: Optional[str] = None,
         date_given: Optional[str] = None,
         spoc_contact: Optional[str] = None,
+        normalized_heading: Optional[str] = None,
     ) -> Optional[int]:
         """Returns the inserted row id, or None if it was a duplicate."""
         dedupe_hash = self.make_task_dedupe_hash(source_type, source_ref_id, task)
@@ -300,9 +303,9 @@ class Database:
                     source_type, source_ref_id, task, task_description, rationale,
                     growth_pillar, deadline, urgency, sender_or_speaker, summary,
                     source_detail, source_link, date_given, spoc_contact,
-                    status, created_at, dedupe_hash
+                    normalized_heading, status, created_at, dedupe_hash
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
                 (
                     source_type,
@@ -319,19 +322,82 @@ class Database:
                     source_link,
                     date_given,
                     spoc_contact,
+                    normalized_heading,
                     _utcnow(),
                     dedupe_hash,
                 ),
             )
             return int(cur.lastrowid) if cur.rowcount > 0 else None
 
+    def find_open_task_by_heading(
+        self,
+        *,
+        normalized_heading: str,
+        spoc: Optional[str],
+    ) -> Optional[sqlite3.Row]:
+        """
+        Find an OPEN task that matches the given normalized heading and SPOC.
+        Used by TaskService to merge new updates into an existing task row
+        instead of creating duplicate rows.
+
+        Both `normalized_heading` and `spoc` are matched case-insensitively;
+        SPOC may be NULL on either side and we still consider it a match
+        when both are NULL.
+        """
+        if not normalized_heading:
+            return None
+        rows = self.fetchall(
+            """
+            SELECT *
+              FROM extracted_tasks
+             WHERE status = 'open'
+               AND LOWER(COALESCE(normalized_heading,'')) = LOWER(?)
+               AND LOWER(COALESCE(sender_or_speaker,'')) = LOWER(COALESCE(?, ''))
+             ORDER BY created_at ASC
+             LIMIT 1
+            """,
+            (normalized_heading, spoc or ""),
+        )
+        return rows[0] if rows else None
+
+    def append_task_update(self, task_id: int, update_line: str) -> None:
+        """
+        Append `update_line` to the task's all_updates column (newest-last)
+        and mark the row unsynced so the next forward-sync push refreshes
+        the sheet/Excel cell.
+
+        Empty / whitespace-only update_line is a no-op.
+        """
+        line = (update_line or "").strip()
+        if not line:
+            return
+        with self.connection() as conn:
+            cur = conn.execute(
+                "SELECT all_updates FROM extracted_tasks WHERE id = ?",
+                (task_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return
+            existing = (row["all_updates"] or "").strip()
+            new_value = f"{existing}\n{line}".strip() if existing else line
+            conn.execute(
+                """
+                UPDATE extracted_tasks
+                   SET all_updates      = ?,
+                       synced_to_sheets = 0
+                 WHERE id = ?
+                """,
+                (new_value, task_id),
+            )
+
     def unsynced_tasks(self, limit: int = 100) -> list[sqlite3.Row]:
         return self.fetchall(
             """
             SELECT id, source_type, source_ref_id, source_detail, source_link,
                    date_given, task, task_description, rationale, growth_pillar,
-                   deadline, urgency, sender_or_speaker, spoc_contact, summary,
-                   status, created_at
+                   deadline, urgency, sender_or_speaker, spoc_contact,
+                   all_updates, summary, status, created_at
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
              ORDER BY created_at ASC
