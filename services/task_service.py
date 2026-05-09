@@ -4,6 +4,14 @@ Task persistence service.
 Acts as the single doorway through which extracted tasks enter the DB.
 Centralising it here means the dedup hash, status defaults, and source-id
 formatting can't drift between the email and meeting flows.
+
+Task-merge model:
+  Two extracted tasks are considered the SAME work item when they share
+  a normalized heading AND a SPOC. When a new task arrives that matches
+  an existing OPEN row, instead of creating a duplicate sheet row we
+  append a chronological line to that row's `all_updates` column. This
+  keeps the sheet a clean one-row-per-task view while preserving the
+  full follow-up history.
 """
 from __future__ import annotations
 
@@ -21,6 +29,76 @@ logger = get_logger(__name__)
 # "Foo Bar <foo@bar.com>" -> "Foo Bar". Falls back to the email if there's
 # no display-name part.
 _DISPLAY_NAME_RE = re.compile(r'^\s*"?([^"<]+?)"?\s*<')
+
+# Whitespace-collapse used when normalizing headings for dedup.
+_WS_RE = re.compile(r"\s+")
+# Common imperative prefixes that vary between extractions of the same
+# task ("Send X" vs "Share X" vs "Provide X"). Strip them when present
+# so e.g. "Send the Q3 budget" merges with "Share the Q3 budget".
+_IMPERATIVE_PREFIXES: tuple[str, ...] = (
+    "send the ", "send ", "share the ", "share ",
+    "provide the ", "provide ", "draft the ", "draft ",
+    "prepare the ", "prepare ", "review the ", "review ",
+    "follow up on ", "follow up with ", "follow up ",
+    "check on the ", "check the ", "check ",
+    "confirm the ", "confirm ", "finalize the ", "finalize ",
+    "finalise the ", "finalise ", "create the ", "create ",
+    "build the ", "build ", "set up the ", "set up ",
+    "setup the ", "setup ", "update the ", "update ",
+)
+
+
+def normalize_heading(heading: Optional[str]) -> str:
+    """
+    Canonical form of a task heading used for merge-by-equality.
+    Lowercase, collapse whitespace, drop trailing punctuation, and
+    strip common imperative prefixes that vary between extractions.
+    """
+    if not heading:
+        return ""
+    s = heading.strip().lower()
+    s = _WS_RE.sub(" ", s)
+    s = s.rstrip(".!?:; ")
+    for pref in _IMPERATIVE_PREFIXES:
+        if s.startswith(pref):
+            s = s[len(pref):].lstrip()
+            break
+    return s
+
+
+def _format_update_line(
+    *,
+    when: Optional[str],
+    speaker: Optional[str],
+    source_label: str,
+    note: Optional[str],
+) -> str:
+    """
+    Render one entry for the All Updates column. Format:
+        "YYYY-MM-DD HH:MM — Speaker (source): note"
+    Any field that's missing is gracefully skipped — never produces a
+    line with placeholder junk like "(unknown)".
+    """
+    parts: list[str] = []
+    if when:
+        # Trim ISO 8601 to minute precision for compactness.
+        ts = when[:16].replace("T", " ")
+        parts.append(ts)
+    who_bits: list[str] = []
+    if speaker:
+        who_bits.append(speaker)
+    if source_label:
+        who_bits.append(f"({source_label})")
+    head = " ".join(who_bits).strip()
+    body = (note or "").strip()
+    line = ""
+    if parts:
+        line = parts[0]
+    if head:
+        line = f"{line} — {head}" if line else head
+    if body:
+        line = f"{line}: {body}" if line else body
+    return line
 
 
 def clean_sender_name(raw: Optional[str]) -> str:
@@ -168,7 +246,11 @@ class TaskService:
         default_speaker: Optional[str],
         tasks: Iterable[ExtractedTask],
     ) -> int:
+        # Imported here to avoid a circular at module-load time.
+        from sheets.sync import _format_source_label
+
         inserted = 0
+        merged = 0
         for task in tasks:
             # Defensive name-canonicalisation on every text field that
             # could carry a misheard name through from Whisper or the LLM.
@@ -190,6 +272,34 @@ class TaskService:
                 clean_identifier(task.owner_contact)
                 or clean_identifier(spoc_contact)
             )
+            normalized = normalize_heading(heading)
+
+            # Merge: if we already track an OPEN task with the same
+            # canonical heading and same SPOC, append an update entry
+            # to it instead of creating a duplicate row.
+            existing = self._db.find_open_task_by_heading(
+                normalized_heading=normalized,
+                spoc=spoc,
+            )
+            if existing is not None:
+                update_line = _format_update_line(
+                    when=date_given,
+                    speaker=spoc or default_speaker,
+                    source_label=_format_source_label(
+                        source_type=source_type,
+                        source_detail=source_detail or "",
+                    ),
+                    note=description or correct_names(summary or "") or rationale,
+                )
+                self._db.append_task_update(int(existing["id"]), update_line)
+                merged += 1
+                logger.info(
+                    "Merged into existing task id=%s (%r) — appended update.",
+                    existing["id"],
+                    heading,
+                )
+                continue
+
             row_id = self._db.insert_task(
                 source_type=source_type,
                 source_ref_id=source_ref_id,
@@ -205,14 +315,16 @@ class TaskService:
                 source_link=source_link,
                 date_given=date_given,
                 spoc_contact=contact,
+                normalized_heading=normalized,
             )
             if row_id is not None:
                 inserted += 1
             else:
                 logger.debug("Duplicate task ignored: %r (ref=%s)", heading, source_ref_id)
 
-        if inserted:
+        if inserted or merged:
             logger.info(
-                "Saved %d new task(s) from %s/%s", inserted, source_type, source_ref_id
+                "%s/%s: %d new task(s), %d merged update(s).",
+                source_type, source_ref_id, inserted, merged,
             )
         return inserted

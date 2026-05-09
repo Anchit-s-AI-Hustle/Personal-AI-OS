@@ -24,7 +24,8 @@ Column layout (identical in all four tabs):
     J  SPOC Contact         (email or phone — never blank if SPOC is set)
     K  Priority             (Low | Medium | High | Critical)
     L  Task Deadline        (when this should ship / be done by)
-    M  Remarks              (left blank — for human use)
+    M  All Updates          (chronological log of follow-ups across sources)
+    N  Remarks              (left blank — for human use)
 """
 from __future__ import annotations
 
@@ -86,7 +87,8 @@ HEADERS: list[str] = [
     "SPOC Contact",       # J
     "Priority",           # K
     "Task Deadline",      # L  (renamed from "Go Live")
-    "Remarks",            # M
+    "All Updates",        # M  (chronological log of follow-ups across sources)
+    "Remarks",            # N
 ]
 
 # Status column letter — used by update_status. If HEADERS shifts, change here.
@@ -130,15 +132,26 @@ LEGACY_SCHEMAS: list[tuple[list[str], list[int]]] = [
         ],
         [],
     ),
-    # 13-col schema with intermediate "Task Given At" header text. Same
-    # column positions as current; just rewrite the header.
+    # 13-col schema with intermediate "Task Given At" header text. No
+    # "All Updates" column yet — insert one at index 12 (M) so existing
+    # data shifts right one position; "Remarks" ends up at N.
     (
         [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Task Given At", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Task Deadline", "Remarks",
         ],
-        [],
+        [12],
+    ),
+    # 13-col schema with "Task Given On" (current names) but no "All
+    # Updates". Insert at index 12.
+    (
+        [
+            "Task Heading", "Task Description", "Status", "Source", "Source Link",
+            "Task Given On", "Why We're Doing This", "Growth Pillar", "SPOC",
+            "SPOC Contact", "Priority", "Task Deadline", "Remarks",
+        ],
+        [12],
     ),
 ]
 

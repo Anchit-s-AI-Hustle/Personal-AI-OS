@@ -64,7 +64,12 @@ def _format_source_label(*, source_type: str, source_detail: str) -> str:
             return f"Google Chat group: {sd.split(':', 1)[1].strip()}"
         if sl.startswith("space:"):
             return f"Google Space: {sd.split(':', 1)[1].strip()}"
-        return f"Google Chat — {sd}" if sd else "Google Chat"
+        # Fall back: if the detail already conveys "Google Chat" (legacy
+        # backfilled rows where we couldn't reconstruct the partner),
+        # don't double up.
+        if sl in ("google chat", "chat") or not sd:
+            return "Google Chat"
+        return f"Google Chat — {sd}"
 
     if st.lower() == "whatsapp":
         if sl.startswith("whatsapp:"):
@@ -84,12 +89,12 @@ def _format_source_label(*, source_type: str, source_detail: str) -> str:
 
 def _row_for_task(task) -> list[str]:
     """
-    Map a DB row to the 13-column sheet shape.
+    Map a DB row to the 14-column sheet shape.
 
     Column order (matches HEADERS in sheets/client.py):
       Task Heading | Task Description | Status | Source | Source Link |
       Task Given On | Why We're Doing This | Growth Pillar | SPOC |
-      SPOC Contact | Priority | Task Deadline | Remarks
+      SPOC Contact | Priority | Task Deadline | All Updates | Remarks
     """
     # `task` is a sqlite3.Row; .keys() lets us tolerate older rows that
     # predate the migration columns.
@@ -117,13 +122,14 @@ def _row_for_task(task) -> list[str]:
         get("status") or "open",              # Status
         source_label,                         # Source
         get("source_link"),                   # Source Link
-        date_given,                           # Date Given
+        date_given,                           # Task Given On
         get("rationale"),                     # Why We're Doing This
         get("growth_pillar") or "Other",      # Growth Pillar
         get("sender_or_speaker"),             # SPOC
         get("spoc_contact"),                  # SPOC Contact
         get("urgency") or "Medium",           # Priority
-        get("deadline"),                      # Go Live
+        get("deadline"),                      # Task Deadline
+        get("all_updates"),                   # All Updates (chronological)
         "",                                   # Remarks (left blank for human use)
     ]
 

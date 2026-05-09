@@ -56,7 +56,8 @@ def _column_widths() -> dict[str, int]:
         "J": 28,  # SPOC Contact
         "K": 12,  # Priority
         "L": 18,  # Task Deadline
-        "M": 30,  # Remarks
+        "M": 60,  # All Updates (chronological log)
+        "N": 30,  # Remarks
     }
 
 

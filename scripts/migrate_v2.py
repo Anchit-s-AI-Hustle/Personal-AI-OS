@@ -52,8 +52,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import get_db  # noqa: E402
+from services.task_service import normalize_heading, _format_update_line  # noqa: E402
 from sheets.client import HEADERS, TAB_ORDER  # noqa: E402
 from sheets.excel_mirror import DEFAULT_PATH, ExcelMirror  # noqa: E402
+from sheets.sync import _format_source_label  # noqa: E402
+from utils.identifiers import clean_identifier  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger("migrate_v2")
@@ -142,6 +145,151 @@ def step1_backfill_db() -> dict:
     return fixed
 
 
+def step1a_sanitize_identifiers() -> int:
+    """
+    Walk every row and run sender_or_speaker / spoc_contact through
+    `clean_identifier`. Strips opaque junk like `users/<id>`, `(unknown)`,
+    UUID-like strings — anything that isn't a real name/email/phone.
+    Returns the number of rows patched.
+    """
+    db = get_db()
+    rows = db.fetchall(
+        """
+        SELECT id, sender_or_speaker, spoc_contact
+          FROM extracted_tasks
+        """
+    )
+    patched = 0
+    for r in rows:
+        new_spoc = clean_identifier(r["sender_or_speaker"])
+        new_contact = clean_identifier(r["spoc_contact"])
+        if (
+            (new_spoc or None) == (r["sender_or_speaker"] or None)
+            and (new_contact or None) == (r["spoc_contact"] or None)
+        ):
+            continue
+        db.execute(
+            """
+            UPDATE extracted_tasks
+               SET sender_or_speaker = ?,
+                   spoc_contact      = ?
+             WHERE id = ?
+            """,
+            (new_spoc, new_contact, int(r["id"])),
+        )
+        patched += 1
+    logger.info(
+        "Step 1a sanitize: %d row(s) had placeholder SPOC/contact stripped.",
+        patched,
+    )
+    return patched
+
+
+def step1b_dedup_existing_tasks() -> dict:
+    """
+    Walk every OPEN task. Group by (normalized_heading, lowercase SPOC).
+    Within each group: keep the OLDEST row as the canonical task; for
+    every other row in the group, append a structured update line to the
+    canonical row's all_updates and DELETE the duplicate row.
+
+    Also: for the canonical row, populate `normalized_heading` (so future
+    inserts via TaskService.merge logic find the same group key) and
+    rebuild its all_updates from every contributing row's metadata,
+    chronologically ordered.
+
+    Result: at most one open row per (heading, SPOC) pair.
+    """
+    db = get_db()
+    rows = db.fetchall(
+        """
+        SELECT id, source_type, source_detail, task, task_description,
+               sender_or_speaker, date_given, created_at, summary,
+               all_updates, status
+          FROM extracted_tasks
+         WHERE status = 'open'
+         ORDER BY COALESCE(date_given, created_at) ASC, id ASC
+        """
+    )
+
+    # Build groups keyed on (normalized heading, lowercase SPOC).
+    groups: dict[tuple[str, str], list] = {}
+    for r in rows:
+        key = (
+            normalize_heading(r["task"]),
+            (clean_identifier(r["sender_or_speaker"]) or "").lower(),
+        )
+        if not key[0]:
+            continue
+        groups.setdefault(key, []).append(r)
+
+    canonical_kept = 0
+    duplicates_merged = 0
+    duplicates_deleted = 0
+
+    for (norm, spoc_lc), group in groups.items():
+        canonical = group[0]
+        canonical_id = int(canonical["id"])
+        canonical_kept += 1
+
+        # Build the canonical row's All Updates from every group member.
+        update_lines: list[str] = []
+        for r in group:
+            line = _format_update_line(
+                when=r["date_given"] or r["created_at"],
+                speaker=clean_identifier(r["sender_or_speaker"]),
+                source_label=_format_source_label(
+                    source_type=r["source_type"] or "",
+                    source_detail=r["source_detail"] or "",
+                ),
+                note=(r["task_description"] or r["summary"] or "").strip(),
+            )
+            if line:
+                update_lines.append(line)
+        # Preserve any pre-existing all_updates on the canonical row.
+        if canonical["all_updates"]:
+            update_lines.insert(0, canonical["all_updates"].strip())
+        # De-dup identical lines while preserving order.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for ln in update_lines:
+            if ln and ln not in seen:
+                seen.add(ln)
+                deduped.append(ln)
+        new_updates = "\n".join(deduped) if deduped else None
+
+        # Patch canonical row.
+        db.execute(
+            """
+            UPDATE extracted_tasks
+               SET normalized_heading = ?,
+                   all_updates        = ?,
+                   synced_to_sheets   = 0
+             WHERE id = ?
+            """,
+            (norm, new_updates, canonical_id),
+        )
+
+        # Delete every other row in the group.
+        if len(group) > 1:
+            dup_ids = [int(r["id"]) for r in group[1:]]
+            duplicates_merged += len(dup_ids)
+            duplicates_deleted += len(dup_ids)
+            qmarks = ",".join("?" * len(dup_ids))
+            db.execute(
+                f"DELETE FROM extracted_tasks WHERE id IN ({qmarks})",
+                tuple(dup_ids),
+            )
+
+    logger.info(
+        "Step 1b dedup: %d canonical task(s) kept, %d duplicate(s) merged + deleted.",
+        canonical_kept, duplicates_deleted,
+    )
+    return {
+        "canonical": canonical_kept,
+        "merged": duplicates_merged,
+    }
+
+
 def step2_reset_sync_state() -> int:
     """Force every task to re-push to Sheets/Excel cleanly on next sync."""
     db = get_db()
@@ -223,8 +371,8 @@ def step3_rebuild_excel() -> bool:
         return False
 
     logger.info(
-        "Excel rebuilt from scratch: %s -> 4 tabs, 13 cols, no data rows.",
-        path,
+        "Excel rebuilt from scratch: %s -> %d tabs, %d cols, no data rows.",
+        path, len(TAB_ORDER), len(HEADERS),
     )
 
     # Reset the singleton flag so any subsequent ExcelMirror call sees the
@@ -236,15 +384,20 @@ def step3_rebuild_excel() -> bool:
 def main() -> int:
     print("=== Personal AI OS — v2 schema migration ===")
     s1 = step1_backfill_db()
+    sa = step1a_sanitize_identifiers()
+    sd = step1b_dedup_existing_tasks()
     s2 = step2_reset_sync_state()
     ok = step3_rebuild_excel()
 
     print()
     print("Summary:")
-    print(f"  Step 1 backfill : date_given={s1['date_given']}, source_link={s1['source_link']}, "
+    print(f"  Step 1  backfill : date_given={s1['date_given']}, source_link={s1['source_link']}, "
           f"source_detail={s1['source_detail']}, spoc_contact={s1['spoc_contact']}")
-    print(f"  Step 2 reset    : {s2} task(s) marked unsynced")
-    print(f"  Step 3 Excel    : {'rebuilt' if ok else 'SKIPPED (see log)'}")
+    print(f"  Step 1a sanitize : {sa} row(s) had placeholder SPOC/contact stripped")
+    print(f"  Step 1b dedup    : {sd['canonical']} canonical task(s) kept, "
+          f"{sd['merged']} duplicate(s) merged into All Updates")
+    print(f"  Step 2  reset    : {s2} task(s) marked unsynced")
+    print(f"  Step 3  Excel    : {'rebuilt' if ok else 'SKIPPED (see log)'}")
     print()
     print("Next steps:")
     print("  1. (Optional but recommended) In Google Sheets, manually delete every")
