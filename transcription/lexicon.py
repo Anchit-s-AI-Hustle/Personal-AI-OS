@@ -104,6 +104,22 @@ KNOWN_PEOPLE: dict[str, list[str]] = {
 }
 
 
+# Map of full-name / display-variant -> canonical short form for the SPOC
+# column. Applied AFTER `correct_names()` in `canonical_spoc()`. Lowercase
+# keys; matching is case-insensitive after parenthetical-suffix stripping.
+#
+# Use this when one person appears under multiple full or variant names
+# in the source material (e.g. "Anchit (Self)", "Anchit Tandon" both ->
+# "Anchit"). It collapses them to a single SPOC string so the merge-by-
+# heading-and-SPOC logic in TaskService doesn't keep them as separate rows.
+CANONICAL_DISPLAY: dict[str, str] = {
+    "anchit tandon":   "Anchit",
+    "anchit (self)":   "Anchit",
+    "anchit self":     "Anchit",
+    "aman gupta":      "Aman",
+}
+
+
 # Brand / product / channel vocabulary that helps Whisper not butcher
 # domain terms. These also get auto-fed via the WHISPER_PROMPT.
 BRAND_TERMS = [
@@ -208,3 +224,34 @@ def correct_names(text: str) -> str:
 def correct_names_in_fields(fields: Iterable[str | None]) -> list[str | None]:
     """Vectorised version for a row of strings (some may be None)."""
     return [correct_names(f) if isinstance(f, str) else f for f in fields]
+
+
+# Strip a trailing parenthetical like " (Self)" or " (Vahdam)" off a
+# display name. Used inside canonical_spoc() to fold "Anchit (Self)"
+# and "Anchit" together regardless of whether the variant is in
+# CANONICAL_DISPLAY.
+_PAREN_SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def canonical_spoc(name: str | None) -> str | None:
+    """
+    Canonicalise a SPOC display name for the sheet's SPOC column.
+
+    Pipeline:
+      1. `correct_names` to fix misspellings ("Anshith" -> "Anchit").
+      2. Strip a trailing parenthetical suffix (" (Self)", " (Vahdam)").
+      3. Lookup CANONICAL_DISPLAY for full-name -> short-form collapse
+         ("Anchit Tandon" -> "Anchit", "Aman Gupta" -> "Aman").
+      4. Return None if the result is empty.
+
+    Used at every TaskService entry point AND by the migration sanitizer
+    so the SPOC merge key in find_open_task_by_heading() stays stable.
+    """
+    if name is None:
+        return None
+    fixed = correct_names(name).strip()
+    if not fixed:
+        return None
+    stripped = _PAREN_SUFFIX_RE.sub("", fixed).strip()
+    key = stripped.lower()
+    return CANONICAL_DISPLAY.get(key, stripped or fixed) or None
