@@ -13,16 +13,14 @@ status updates can patch both rows.
 Column layout (same in all three tabs):
     A  Task Heading
     B  Task Description     (always includes context: project / topic / customer)
-    C  Status
+    C  Status               (open | done | dropped)
     D  Source               (e.g. "Email | from Aman <aman@vahdam.com>")
-    E  Source Link          (clickable URL to the original mail / chat space)
-    F  Date Given           (when the source happened, local time)
-    G  Task Deadline        (when the task is due, parsed from content)
-    H  Why We're Doing This
-    I  Growth Pillar
-    J  SPOC                 (name + email/phone if known)
-    K  Priority
-    L  Remarks
+    E  Why We're Doing This (the rationale / business reason)
+    F  Growth Pillar        (Operations | Retention | Acquisition | ... | Other)
+    G  SPOC                 (the person responsible — sender or speaker)
+    H  Priority             (Low | Medium | High | Critical)
+    I  Go Live              (deadline / when this should ship)
+    J  Remarks              (left blank — for human use)
 """
 from __future__ import annotations
 
@@ -52,6 +50,21 @@ HEADERS: list[str] = [
     "Task Description",
     "Status",
     "Source",
+    "Why We're Doing This",
+    "Growth Pillar",
+    "SPOC",
+    "Priority",
+    "Go Live",
+    "Remarks",
+]
+
+# Pre-"Source" 9-column layout used by older deployments. Self-heal logic
+# in SheetsClient and ExcelMirror detects this and inserts a blank Source
+# column at index 3 to bring rows into the current schema.
+LEGACY_HEADERS_NO_SOURCE: list[str] = [
+    "Task Heading",
+    "Task Description",
+    "Status",
     "Why We're Doing This",
     "Growth Pillar",
     "SPOC",
@@ -183,6 +196,17 @@ class SheetsClient:
         if rows and rows[0] == HEADERS:
             return  # already correct
 
+        # Legacy schema: header row is the 9-col pre-"Source" layout.
+        # Insert an empty column D in every existing data row so the
+        # historical data realigns with the new HEADERS before we rewrite
+        # the header.
+        if rows and rows[0][: len(LEGACY_HEADERS_NO_SOURCE)] == LEGACY_HEADERS_NO_SOURCE:
+            logger.info(
+                "Tab %r is on the legacy 9-col schema; inserting blank Source column at D.",
+                tab,
+            )
+            self._insert_blank_source_column(tab)
+
         logger.info("Writing header row to tab %r", tab)
 
         def _write() -> None:
@@ -194,6 +218,38 @@ class SheetsClient:
             ).execute()
 
         retry_call(_write, attempts=3, exceptions=(HttpError, TimeoutError))
+
+    def _insert_blank_source_column(self, tab: str) -> None:
+        """
+        Shift columns D..end one to the right, leaving an empty column D.
+        Used to migrate a tab from the legacy 9-col schema (no Source) to
+        the current 10-col schema. Idempotency is enforced by the caller
+        (only invoked when the header row matches LEGACY_HEADERS_NO_SOURCE).
+        """
+        meta = self._fetch_meta()
+        sheet_id = None
+        for s in meta.get("sheets", []):
+            if s["properties"]["title"] == tab:
+                sheet_id = s["properties"]["sheetId"]
+                break
+        if sheet_id is None:
+            return
+
+        request = {
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 3,   # column D, 0-indexed
+                    "endIndex": 4,
+                },
+                "inheritFromBefore": False,
+            }
+        }
+        try:
+            self._batch_update([request])
+        except Exception:
+            logger.exception("Could not insert blank Source column into %r", tab)
 
     def _style_headers(self) -> None:
         """Bold + frozen + light-grey-fill row 1 across all 3 tabs."""
