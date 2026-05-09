@@ -31,14 +31,65 @@ SYNC_INTERVAL_SECONDS = 30
 BATCH_SIZE = 50
 
 
+def _format_source_label(*, source_type: str, source_detail: str) -> str:
+    """
+    Build the human-readable Source-column string. Maps DB source_type +
+    source_detail into the wording the user wants in the sheet:
+
+      Email                 -> "Email from <Name>"           (detail = "from <Name>")
+      Chat / DM             -> "Google Chat with <Name>"      (detail = "DM with <Name>")
+      Chat / Group          -> "Google Chat group: <Name>"    (detail = "Group: <Name>")
+      Chat / Space          -> "Google Space: <Name>"         (detail = "Space: <Name>")
+      WhatsApp              -> "WhatsApp with <Name>"         (detail = "WhatsApp: <Name>")
+      Meeting / voice memo  -> "In-person meeting (<Self>)"   (detail = "voice memo by <Self>")
+
+    Falls back gracefully for any detail that doesn't match a known
+    pattern — never returns a placeholder identifier.
+    """
+    st = (source_type or "").strip()
+    sd = (source_detail or "").strip()
+    sl = sd.lower()
+
+    if st.lower() == "email":
+        if sl.startswith("from "):
+            return f"Email from {sd[5:].strip()}"
+        return "Email"
+
+    if st.lower() == "chat":
+        if sl.startswith("dm with "):
+            return f"Google Chat with {sd[8:].strip()}"
+        if sl == "dm":
+            return "Google Chat (DM)"
+        if sl.startswith("group:"):
+            return f"Google Chat group: {sd.split(':', 1)[1].strip()}"
+        if sl.startswith("space:"):
+            return f"Google Space: {sd.split(':', 1)[1].strip()}"
+        return f"Google Chat — {sd}" if sd else "Google Chat"
+
+    if st.lower() == "whatsapp":
+        if sl.startswith("whatsapp:"):
+            return f"WhatsApp with {sd.split(':', 1)[1].strip()}"
+        return f"WhatsApp with {sd}" if sd else "WhatsApp"
+
+    if st.lower() == "meeting":
+        if sl.startswith("voice memo by "):
+            return f"In-person meeting ({sd[len('voice memo by '):].strip()})"
+        return f"In-person meeting — {sd}" if sd else "In-person meeting"
+
+    # Unknown source_type — pass through readable detail if any.
+    if sd:
+        return f"{st or 'Source'} — {sd}"
+    return st or "Source"
+
+
 def _row_for_task(task) -> list[str]:
     """
     Map a DB row to the 13-column sheet shape.
 
     Column order (matches HEADERS in sheets/client.py):
       Task Heading | Task Description | Status | Source | Source Link |
-      Date Given | Why We're Doing This | Growth Pillar | SPOC |
-      SPOC Contact | Priority | Go Live | Remarks
+      Task Given On | Why We're Doing This | Growth Pillar | SPOC |
+      SPOC Contact | Priority | Task Deadline | Remarks
     """
     # `task` is a sqlite3.Row; .keys() lets us tolerate older rows that
     # predate the migration columns.
@@ -50,16 +101,10 @@ def _row_for_task(task) -> list[str]:
             return v if v is not None else ""
         return ""
 
-    # Source column = "<source_type> | <human-readable detail>" if we have
-    # the detail (sender name, DM partner, space name, etc.), otherwise
-    # just the type. Examples:
-    #   "Email | from Aman Kumar"
-    #   "Chat | DM with Manisha Kushwaha"
-    #   "Chat | Space: D2C - Content + Conversion - ROAS"
-    #   "Meeting | voice memo by Anchit (Self)"
-    src_type = get("source_type") or "Unknown"
-    src_detail = get("source_detail")
-    source_label = f"{src_type} | {src_detail}" if src_detail else src_type
+    source_label = _format_source_label(
+        source_type=get("source_type"),
+        source_detail=get("source_detail"),
+    )
 
     # Date Given falls back to created_at if the source-specific timestamp
     # was never recorded (e.g. for tasks inserted before the date_given

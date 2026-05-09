@@ -46,7 +46,10 @@ logger = get_logger(__name__)
 TAB_ALL_TASKS = "Master Task List"
 TAB_FROM_GMAIL = "Tasks from Gmail"
 TAB_FROM_WHATSAPP = "Tasks from WhatsApp"
-TAB_FROM_DISCUSSIONS = "Tasks from In-Person Discussions"
+# Excel limits worksheet titles to 31 characters. "Tasks from In-Person
+# Discussions" is 32 chars, so we use a 30-char form that still reads
+# clearly. Both Sheets and Excel use the same name.
+TAB_FROM_DISCUSSIONS = "Tasks from In-Person Meetings"
 TAB_ORDER: tuple[str, ...] = (
     TAB_ALL_TASKS,
     TAB_FROM_GMAIL,
@@ -61,10 +64,12 @@ TAB_FROM_MAILS = TAB_FROM_GMAIL
 # existing rows aren't lost. Order: oldest -> newest. Applied first in
 # ensure_tabs(), before the missing-tab / reorder logic runs.
 LEGACY_TAB_RENAMES: dict[str, str] = {
-    "All Tasks":                TAB_ALL_TASKS,
-    "Tasks From Mails":         TAB_FROM_GMAIL,
-    "Tasks From WhatsApp":      TAB_FROM_WHATSAPP,
-    "Tasks From Discussions":   TAB_FROM_DISCUSSIONS,
+    "All Tasks":                            TAB_ALL_TASKS,
+    "Tasks From Mails":                     TAB_FROM_GMAIL,
+    "Tasks From WhatsApp":                  TAB_FROM_WHATSAPP,
+    "Tasks From Discussions":               TAB_FROM_DISCUSSIONS,
+    # Catch the 32-char form a previous migration may have set.
+    "Tasks from In-Person Discussions":     TAB_FROM_DISCUSSIONS,
 }
 
 
