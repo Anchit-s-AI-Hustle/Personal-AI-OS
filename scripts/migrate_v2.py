@@ -56,6 +56,7 @@ from services.task_service import normalize_heading, _format_update_line  # noqa
 from sheets.client import HEADERS, TAB_ORDER  # noqa: E402
 from sheets.excel_mirror import DEFAULT_PATH, ExcelMirror  # noqa: E402
 from sheets.sync import _format_source_label  # noqa: E402
+from transcription.lexicon import canonical_spoc  # noqa: E402
 from utils.identifiers import clean_identifier  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
@@ -161,7 +162,10 @@ def step1a_sanitize_identifiers() -> int:
     )
     patched = 0
     for r in rows:
-        new_spoc = clean_identifier(r["sender_or_speaker"])
+        # Identifier strip first (drop "users/12345" junk), then canonical
+        # display collapse ("Anchit Tandon" -> "Anchit", "Aman Gupta" ->
+        # "Aman", "Anchit (Self)" -> "Anchit").
+        new_spoc = canonical_spoc(clean_identifier(r["sender_or_speaker"]))
         new_contact = clean_identifier(r["spoc_contact"])
         if (
             (new_spoc or None) == (r["sender_or_speaker"] or None)
@@ -179,7 +183,7 @@ def step1a_sanitize_identifiers() -> int:
         )
         patched += 1
     logger.info(
-        "Step 1a sanitize: %d row(s) had placeholder SPOC/contact stripped.",
+        "Step 1a sanitize: %d row(s) had SPOC/contact normalized or stripped.",
         patched,
     )
     return patched

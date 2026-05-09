@@ -20,7 +20,7 @@ from typing import Iterable, Optional
 
 from database import get_db
 from database.models import ExtractedTask
-from transcription.lexicon import correct_names
+from transcription.lexicon import canonical_spoc, correct_names
 from utils.identifiers import clean_identifier
 from utils.logger import get_logger
 
@@ -263,8 +263,8 @@ class TaskService:
             # ("users/12345"), never "(unknown)", never blank-ish junk.
             # If the LLM (or upstream chat client) couldn't find a real
             # name, leave SPOC empty rather than poisoning the column.
-            raw_spoc = correct_names(task.sender_or_speaker or default_speaker or "")
-            spoc = clean_identifier(raw_spoc)
+            raw_spoc = task.sender_or_speaker or default_speaker or ""
+            spoc = canonical_spoc(clean_identifier(raw_spoc))
             # Per-task contact (from the LLM) wins; fall back to the
             # source-level contact (e.g. email sender). Anything that
             # doesn't look like a real email/phone is dropped.
