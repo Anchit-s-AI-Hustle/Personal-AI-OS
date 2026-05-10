@@ -392,6 +392,12 @@ class Database:
             )
 
     def unsynced_tasks(self, limit: int = 100) -> list[sqlite3.Row]:
+        # Order DESC by date_given so a fresh-rebuild push lays rows down
+        # newest-first in the Sheet — i.e. the top rows are the most
+        # recently-given tasks. NULL date_given comes last (rare; only
+        # when neither extraction nor migration could recover one).
+        # `created_at` is the tiebreaker for tasks with the same exact
+        # date_given timestamp.
         return self.fetchall(
             """
             SELECT id, source_type, source_ref_id, source_detail, source_link,
@@ -400,7 +406,7 @@ class Database:
                    all_updates, summary, status, created_at
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
-             ORDER BY created_at ASC
+             ORDER BY date_given IS NULL, date_given DESC, created_at DESC
              LIMIT ?
             """,
             (limit,),
