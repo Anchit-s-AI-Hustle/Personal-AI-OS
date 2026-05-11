@@ -18,9 +18,7 @@ from database import get_db
 from utils.logger import get_logger
 
 from .client import (
-    HEADERS,
     SheetsClient,
-    SORT_KEY_COL_INDEX,
     TAB_ALL_TASKS,
     get_sheets_client,
     source_tab_for,
@@ -132,14 +130,12 @@ def _format_source_label(*, source_type: str, source_detail: str) -> str:
         return f"Google Chat — {sd}"
 
     if st.lower() == "meeting":
-        if sl.startswith("voice memo by "):
-            # Run the speaker name through canonical_spoc so we don't
-            # end up with "In-person meeting (Anchit (Self))" — collapse
-            # to "In-person meeting (Anchit)".
-            from transcription.lexicon import canonical_spoc
-            speaker = canonical_spoc(sd[len("voice memo by "):].strip()) or ""
-            return f"In-person meeting ({speaker})" if speaker else "In-person meeting"
-        return f"In-person meeting — {sd}" if sd else "In-person meeting"
+        # We capture from a single laptop mic — we have no idea who else
+        # is in the room, only that audio was recorded. "Anchit" is always
+        # the user, so naming them adds no info and worse: it reads like
+        # "meeting with Anchit". Use the neutral "Voice memo" label and
+        # let the SPOC column (col I) carry any speaker the LLM identified.
+        return "Voice memo"
 
     # Unknown source_type — pass through readable detail if any.
     if sd:
