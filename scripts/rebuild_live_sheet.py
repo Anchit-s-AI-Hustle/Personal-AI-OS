@@ -289,6 +289,165 @@ def main() -> int:
     if style_requests:
         client._batch_update(style_requests)  # noqa: SLF001
 
+    # 8. Conditional formatting + column widths + frozen heading column.
+    #    The goal is "scan and understand at one glance":
+    #      - Status=done   -> light green row + strike-through
+    #      - Status=dropped-> light grey  row + strike-through
+    #      - Priority=Critical -> red cell
+    #      - Priority=High     -> orange cell
+    #      - Priority=Medium   -> yellow cell
+    #      - Priority=Low      -> grey cell
+    #      - Column widths set generously for the wordy columns
+    #      - Column A (Task Heading) frozen so it stays visible on horizontal scroll
+    cf_requests: list[dict] = []
+    # Pixel widths per column, indexed 0..14.
+    col_pixels = [
+        260,  # A Task Heading
+        420,  # B Task Description
+        90,   # C Status
+        220,  # D Source
+        220,  # E Source Link
+        180,  # F Task Given On
+        320,  # G Why We're Doing This
+        140,  # H Growth Pillar
+        160,  # I SPOC
+        220,  # J SPOC Contact
+        100,  # K Priority
+        160,  # L Task Deadline
+        460,  # M All Updates
+        220,  # N Remarks
+        # O hidden — skip
+    ]
+    for tab in TAB_ORDER:
+        gid = title_to_id.get(tab)
+        if gid is None:
+            continue
+
+        # Column widths.
+        for idx, px in enumerate(col_pixels):
+            cf_requests.append(
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": gid,
+                            "dimension": "COLUMNS",
+                            "startIndex": idx,
+                            "endIndex": idx + 1,
+                        },
+                        "properties": {"pixelSize": px},
+                        "fields": "pixelSize",
+                    }
+                }
+            )
+
+        # Freeze column A (heading) so it stays visible when scrolling right.
+        cf_requests.append(
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": gid,
+                        "gridProperties": {
+                            "frozenRowCount": 1,
+                            "frozenColumnCount": 1,
+                        },
+                    },
+                    "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                }
+            }
+        )
+
+        # Row-level rules driven by Status column (C, idx 2).
+        # "done"   -> light green row + strike-through
+        # "dropped"-> light grey row + strike-through
+        for status_val, fill, strike in [
+            ("done",    {"red": 0.86, "green": 0.96, "blue": 0.85}, True),   # soft green
+            ("dropped", {"red": 0.92, "green": 0.92, "blue": 0.92}, True),   # soft grey
+        ]:
+            cf_requests.append(
+                {
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [{
+                                "sheetId": gid,
+                                "startRowIndex": 1,
+                                "startColumnIndex": 0,
+                                "endColumnIndex": 14,  # don't bleed onto col O
+                            }],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "CUSTOM_FORMULA",
+                                    "values": [
+                                        {"userEnteredValue": f'=LOWER($C2)="{status_val}"'}
+                                    ],
+                                },
+                                "format": {
+                                    "backgroundColor": fill,
+                                    "textFormat": {"strikethrough": strike},
+                                },
+                            },
+                        },
+                        "index": 0,
+                    }
+                }
+            )
+
+        # Priority cell rules on col K (idx 10).
+        # Critical -> red, High -> orange, Medium -> yellow, Low -> grey.
+        for prio_val, fill in [
+            ("Critical", {"red": 0.96, "green": 0.80, "blue": 0.80}),
+            ("High",     {"red": 0.99, "green": 0.89, "blue": 0.78}),
+            ("Medium",   {"red": 1.00, "green": 0.97, "blue": 0.82}),
+            ("Low",      {"red": 0.93, "green": 0.93, "blue": 0.93}),
+        ]:
+            cf_requests.append(
+                {
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [{
+                                "sheetId": gid,
+                                "startRowIndex": 1,
+                                "startColumnIndex": 10,
+                                "endColumnIndex": 11,
+                            }],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "TEXT_EQ",
+                                    "values": [{"userEnteredValue": prio_val}],
+                                },
+                                "format": {
+                                    "backgroundColor": fill,
+                                    "textFormat": {"bold": True},
+                                },
+                            },
+                        },
+                        "index": 0,
+                    }
+                }
+            )
+
+        # Wrap text in the wordy columns so long entries stay readable
+        # without forcing the user to expand row heights.
+        for wide_col_idx in (1, 6, 12):  # Description, Why, All Updates
+            cf_requests.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": gid,
+                            "startRowIndex": 1,
+                            "startColumnIndex": wide_col_idx,
+                            "endColumnIndex": wide_col_idx + 1,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {"wrapStrategy": "WRAP"}
+                        },
+                        "fields": "userEnteredFormat.wrapStrategy",
+                    }
+                }
+            )
+
+    if cf_requests:
+        client._batch_update(cf_requests)  # noqa: SLF001
+
     print()
     print("Live Sheet rebuilt. Final state:")
     for tab in TAB_ORDER:

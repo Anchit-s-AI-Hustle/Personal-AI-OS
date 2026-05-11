@@ -32,38 +32,120 @@ _DISPLAY_NAME_RE = re.compile(r'^\s*"?([^"<]+?)"?\s*<')
 
 # Whitespace-collapse used when normalizing headings for dedup.
 _WS_RE = re.compile(r"\s+")
-# Common imperative prefixes that vary between extractions of the same
-# task ("Send X" vs "Share X" vs "Provide X"). Strip them when present
-# so e.g. "Send the Q3 budget" merges with "Share the Q3 budget".
-_IMPERATIVE_PREFIXES: tuple[str, ...] = (
-    "send the ", "send ", "share the ", "share ",
-    "provide the ", "provide ", "draft the ", "draft ",
-    "prepare the ", "prepare ", "review the ", "review ",
-    "follow up on ", "follow up with ", "follow up ",
-    "check on the ", "check the ", "check ",
-    "confirm the ", "confirm ", "finalize the ", "finalize ",
-    "finalise the ", "finalise ", "create the ", "create ",
-    "build the ", "build ", "set up the ", "set up ",
-    "setup the ", "setup ", "update the ", "update ",
-)
+# Strip non-alphanumeric except inner whitespace, so "Mother's-Day"
+# matches "Mothers Day".
+_PUNCT_RE = re.compile(r"[^\w\s]+")
+
+# Verbs that mean essentially the same thing for our purposes. We
+# collapse all of these to a single canonical form when normalizing.
+# Example: "send", "share", "deliver", "forward", "provide", "submit"
+# all become "send" — so headings that differ only by which verb the
+# LLM chose still match.
+_VERB_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "send":     ("send", "share", "deliver", "forward", "provide", "submit",
+                 "give", "hand over", "pass"),
+    "review":   ("review", "audit", "go through", "look at", "examine",
+                 "verify", "validate", "confirm"),
+    "create":   ("create", "build", "make", "produce", "draft", "design",
+                 "set up", "setup", "establish"),
+    "update":   ("update", "refresh", "edit", "modify", "revise", "adjust",
+                 "tweak", "change"),
+    "follow up": ("follow up", "chase", "ping", "remind", "circle back",
+                  "check on", "check in"),
+    "finalize": ("finalize", "finalise", "lock", "close", "wrap up", "sign off"),
+    "fix":      ("fix", "resolve", "repair", "address", "troubleshoot"),
+    "schedule": ("schedule", "book", "arrange", "set up a meeting", "plan"),
+}
+
+# Stop words dropped from normalized headings. Helps "the Q3 budget"
+# match "Q3 budget", and "report for Aman" match "Aman's report".
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "for", "to", "of", "on", "with", "in", "at", "from",
+    "by", "and", "or", "is", "are", "be", "this", "that", "these", "those",
+    "into", "onto", "via", "about", "regarding", "re", "around",
+})
+
+# Words that genuinely end in "s" but are NOT plural (singular forms in
+# their own right). Naive depluralisation must not chop them.
+_PLURAL_EXCEPTIONS: frozenset[str] = frozenset({
+    "ads", "us", "ios", "pwa", "css", "rss", "as", "is", "was", "has",
+    "kpis", "sms", "aws", "cms", "ops", "yes", "status", "bus", "plus",
+    "focus", "this", "less", "press", "process", "address", "access",
+    "business", "analysis", "boss", "gas", "miss",
+})
+
+
+def _depluralise(word: str) -> str:
+    """
+    Strip a trailing 's' to merge naive plurals. Conservative:
+      - Words shorter than 4 chars: untouched.
+      - Known singular-s words (status, bus, focus, ...): untouched.
+      - Words ending in 'us', 'is', 'os', 'as': untouched (Greek/Latin).
+      - Words ending in 'ss' (process, address): untouched.
+      - 'ies' -> 'y' for proper de-pluralisation of "queries", "stories".
+    """
+    if word in _PLURAL_EXCEPTIONS or len(word) < 4:
+        return word
+    # Words ending in vowel+'s' are usually singular: status, focus, bus.
+    if word[-2:] in ("us", "is", "os", "as"):
+        return word
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"     # "queries" -> "query"
+    if word.endswith("ses") and len(word) > 4:
+        return word[:-2]           # "campuses" -> "campus" (returns "campus")
+    if word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]           # "banners" -> "banner"
+    return word
+
+
+def _apply_verb_synonyms(words: list[str]) -> list[str]:
+    """
+    If the first 1-2 words match a verb-synonym phrase, replace them
+    with the canonical verb. Single-word verbs are checked first, then
+    two-word phrases ("follow up", "set up").
+    """
+    if not words:
+        return words
+    # Two-word verb phrase?
+    if len(words) >= 2:
+        bigram = f"{words[0]} {words[1]}"
+        for canonical, aliases in _VERB_SYNONYMS.items():
+            if bigram in aliases:
+                return [canonical] + words[2:]
+    # Single-word verb?
+    for canonical, aliases in _VERB_SYNONYMS.items():
+        if words[0] in aliases:
+            return [canonical] + words[1:]
+    return words
 
 
 def normalize_heading(heading: Optional[str]) -> str:
     """
-    Canonical form of a task heading used for merge-by-equality.
-    Lowercase, collapse whitespace, drop trailing punctuation, and
-    strip common imperative prefixes that vary between extractions.
+    Canonical form of a task heading used for merge-by-equality dedup.
+
+    Pipeline:
+      1. Lowercase + collapse whitespace + strip punctuation.
+      2. Tokenise into words.
+      3. Collapse verb synonyms ("share" -> "send", "build" -> "create")
+         on the FIRST word/bigram.
+      4. Drop stop words ("the", "a", "for", ...).
+      5. De-pluralise each remaining word ("banners" -> "banner").
+      6. Re-join with single spaces.
+
+    Result: "Send the revised Q3 budgets" and "Share Q3 budget" both
+    normalise to "send q3 budget" and merge into one row.
     """
     if not heading:
         return ""
     s = heading.strip().lower()
-    s = _WS_RE.sub(" ", s)
-    s = s.rstrip(".!?:; ")
-    for pref in _IMPERATIVE_PREFIXES:
-        if s.startswith(pref):
-            s = s[len(pref):].lstrip()
-            break
-    return s
+    s = _PUNCT_RE.sub(" ", s)
+    s = _WS_RE.sub(" ", s).strip()
+    if not s:
+        return ""
+    words = s.split(" ")
+    words = _apply_verb_synonyms(words)
+    words = [_depluralise(w) for w in words if w and w not in _STOPWORDS]
+    return " ".join(words)
 
 
 def _format_update_line(
@@ -74,31 +156,52 @@ def _format_update_line(
     note: Optional[str],
 ) -> str:
     """
-    Render one entry for the All Updates column. Format:
-        "YYYY-MM-DD HH:MM — Speaker (source): note"
-    Any field that's missing is gracefully skipped — never produces a
-    line with placeholder junk like "(unknown)".
+    Render one entry for the All Updates column. Tagged format:
+
+        [YYYY-MM-DD HH:MM · Person · Source] body
+
+    A single bracketed tag at the start carries everything the reader
+    needs to identify *when, by whom, via what channel* — then a
+    compact body. Easier to scan than free-form prose.
+
+    Any tag field that's truly unknown is omitted (no "unknown" /
+    "(none)" placeholders). The tag is dropped entirely if all three
+    fields are blank.
     """
-    parts: list[str] = []
+    # Build the tag interior.
+    tag_parts: list[str] = []
     if when:
-        # Trim ISO 8601 to minute precision for compactness.
-        ts = when[:16].replace("T", " ")
-        parts.append(ts)
-    who_bits: list[str] = []
-    if speaker:
-        who_bits.append(speaker)
-    if source_label:
-        who_bits.append(f"({source_label})")
-    head = " ".join(who_bits).strip()
+        # Trim ISO 8601 to minute precision: "2026-05-12 04:01".
+        ts = when[:16].replace("T", " ").strip()
+        if ts:
+            tag_parts.append(ts)
+    if speaker and speaker.strip():
+        tag_parts.append(speaker.strip())
+    if source_label and source_label.strip():
+        # Compact source: "Email from Aman" -> "Email"; "Google Chat with
+        # Manisha" -> "Google Chat"; etc. The full source already lives
+        # in the row's Source column; All Updates only needs the channel.
+        sl = source_label.strip()
+        compact = (
+            "Email" if sl.lower().startswith("email") else
+            "Google Chat" if "google chat" in sl.lower() else
+            "Google Space" if "google space" in sl.lower() else
+            "In-person meeting" if "in-person" in sl.lower() else
+            sl
+        )
+        tag_parts.append(compact)
+
     body = (note or "").strip()
-    line = ""
-    if parts:
-        line = parts[0]
-    if head:
-        line = f"{line} — {head}" if line else head
-    if body:
-        line = f"{line}: {body}" if line else body
-    return line
+    # Collapse internal whitespace in the body so multi-line LLM output
+    # doesn't break the per-update single-line format.
+    body = _WS_RE.sub(" ", body)
+
+    if not tag_parts and not body:
+        return ""
+    if not tag_parts:
+        return body
+    tag = "[" + " · ".join(tag_parts) + "]"
+    return f"{tag} {body}".rstrip() if body else tag
 
 
 def clean_sender_name(raw: Optional[str]) -> str:
