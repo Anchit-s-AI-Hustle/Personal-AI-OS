@@ -259,7 +259,11 @@ class ExcelMirror:
         sort_col_letter = _gcl(len(HEADERS))
         ws.column_dimensions[sort_col_letter].hidden = True
         ws.column_dimensions[sort_col_letter].width = 0.01  # belt + suspenders
-        ws.freeze_panes = "A2"
+        # Freeze the header row (row 1) AND the first 4 columns
+        # (A-D: Task Heading, Task Description, Task Given On, Status).
+        # The cell at the top-left of the *unfrozen* region is E2 — both
+        # rows above it and columns to its left are pinned.
+        ws.freeze_panes = "E2"
 
 
 _singleton: Optional[ExcelMirror] = None

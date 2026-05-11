@@ -340,7 +340,10 @@ def main() -> int:
                 }
             )
 
-        # Freeze column A (heading) so it stays visible when scrolling right.
+        # Freeze the header row + the first 4 columns (Task Heading,
+        # Task Description, Task Given On, Status). These stay visible
+        # while horizontally scrolling so the user always sees what the
+        # row is about, when it came in, and where it stands.
         cf_requests.append(
             {
                 "updateSheetProperties": {
@@ -348,7 +351,7 @@ def main() -> int:
                         "sheetId": gid,
                         "gridProperties": {
                             "frozenRowCount": 1,
-                            "frozenColumnCount": 1,
+                            "frozenColumnCount": 4,
                         },
                     },
                     "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
