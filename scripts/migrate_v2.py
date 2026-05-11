@@ -26,12 +26,12 @@ What this does, in order:
      DB rows.
 
 After this script runs, restart `python main.py`. On boot:
-  - Sheets/Excel ensure_tabs() will create the WhatsApp tab if needed
+  - Sheets/Excel ensure_tabs() will create any missing managed tabs
     and confirm column headers
   - The forward sync worker will push every DB row in batches; each row
-    lands in the correct tab per the new routing (Email + Chat -> Gmail;
-    WhatsApp -> WhatsApp; Meeting -> In-Person Discussions; everything
-    also goes to Master Task List)
+    lands in the correct tab per the routing (Email + Chat -> Gmail;
+    Meeting -> In-Person Meetings; everything also goes to Master Task
+    List)
 
 Google Sheets caveat: this script can't reach Google Sheets without
 OAuth. To avoid duplicate rows on the cloud side, manually delete every

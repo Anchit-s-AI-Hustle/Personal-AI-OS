@@ -175,40 +175,6 @@ class TaskService:
             tasks=tasks,
         )
 
-    def save_whatsapp_tasks(
-        self,
-        *,
-        gmail_message_id: str,
-        chat_partner: str,
-        chat_summary: Optional[str],
-        tasks: Iterable[ExtractedTask],
-        exported_at: Optional[str] = None,
-        thread_id: Optional[str] = None,
-    ) -> int:
-        """
-        WhatsApp chats arrive as forwarded "Export chat" emails. We use
-        the Gmail message id as the dedup ref and the Gmail link as the
-        source_link so the user can jump back to the export email and
-        re-read the full thread if needed.
-        """
-        link = (
-            f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
-            if thread_id else
-            f"https://mail.google.com/mail/u/0/#inbox/{gmail_message_id}"
-        )
-        detail = f"WhatsApp: {chat_partner}" if chat_partner else "WhatsApp"
-        return self._save(
-            source_type="WhatsApp",
-            source_ref_id=f"whatsapp:{gmail_message_id}",
-            source_detail=detail,
-            source_link=link,
-            date_given=exported_at,
-            spoc_contact=None,  # phone numbers come from the LLM if present
-            summary=chat_summary,
-            default_speaker=None,
-            tasks=tasks,
-        )
-
     def save_chat_tasks(
         self,
         *,
