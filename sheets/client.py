@@ -1,17 +1,16 @@
 """
 Google Sheets API client.
 
-Maintains four tabs in a fixed order:
+Maintains three tabs in a fixed order:
     1. Master Task List              (every task across every source)
     2. Tasks from Gmail              (emails + Google Chat DMs/Spaces/Groups)
-    3. Tasks from WhatsApp           (WhatsApp chat exports)
-    4. Tasks from In-Person Discussions  (meetings / voice memos / live calls)
+    3. Tasks from In-Person Meetings (meetings / voice memos / live calls)
 
 Every task gets dual-written: one row in its source-specific tab and
-one row in "All Tasks". The local DB stores both row numbers so future
-status updates can patch both rows.
+one row in "Master Task List". The local DB stores both row numbers so
+future status updates can patch both rows.
 
-Column layout (identical in all four tabs):
+Column layout (identical in all three tabs):
     A  Task Heading
     B  Task Description     (always includes context: project / topic / customer)
     C  Status               (open | done | dropped)
@@ -51,28 +50,27 @@ logger = get_logger(__name__)
 # Tab names — order matters; this is the order they're created/positioned.
 TAB_ALL_TASKS = "Master Task List"
 TAB_FROM_GMAIL = "Tasks from Gmail"
-TAB_FROM_WHATSAPP = "Tasks from WhatsApp"
-# Excel limits worksheet titles to 31 characters. "Tasks from In-Person
-# Discussions" is 32 chars, so we use a 30-char form that still reads
-# clearly. Both Sheets and Excel use the same name.
+# Excel limits worksheet titles to 31 characters. The longer form
+# "Tasks from In-Person Discussions" is 32 chars, so we use this 29-char
+# variant that still reads clearly. Sheets and Excel use the same name.
 TAB_FROM_DISCUSSIONS = "Tasks from In-Person Meetings"
 TAB_ORDER: tuple[str, ...] = (
     TAB_ALL_TASKS,
     TAB_FROM_GMAIL,
-    TAB_FROM_WHATSAPP,
     TAB_FROM_DISCUSSIONS,
 )
 
 # Backward-compat alias so older imports (TAB_FROM_MAILS) keep working.
 TAB_FROM_MAILS = TAB_FROM_GMAIL
 
-# Legacy tab names that should be RENAMED IN PLACE on next bootstrap so
-# existing rows aren't lost. Order: oldest -> newest. Applied first in
-# ensure_tabs(), before the missing-tab / reorder logic runs.
+# Legacy tab names. On the next ensure_tabs() boot we either rename them
+# (if the new name is the listed value) or just leave them; the explicit
+# rebuild_live_sheet script deletes any tab not in TAB_ORDER. WhatsApp
+# is listed here with the new name set to None so the rebuild script
+# knows to DELETE rather than rename.
 LEGACY_TAB_RENAMES: dict[str, str] = {
     "All Tasks":                            TAB_ALL_TASKS,
     "Tasks From Mails":                     TAB_FROM_GMAIL,
-    "Tasks From WhatsApp":                  TAB_FROM_WHATSAPP,
     "Tasks From Discussions":               TAB_FROM_DISCUSSIONS,
     # Catch the 32-char form a previous migration may have set.
     "Tasks from In-Person Discussions":     TAB_FROM_DISCUSSIONS,
@@ -201,15 +199,17 @@ def source_tab_for(source_type: str) -> str:
     Tab routing:
       - Email + Google Chat (DMs/Spaces/Groups) -> "Tasks from Gmail"
         (Workspace lumps them together; the user wants them in one tab.)
-      - WhatsApp                                -> "Tasks from WhatsApp"
       - Meeting / Conversation / anything else  -> "Tasks from In-Person
-                                                    Discussions" (live audio).
+                                                    Meetings" (live audio).
+
+    WhatsApp support was removed — any rows with source_type='WhatsApp'
+    fall through to the In-Person Meetings tab. They shouldn't exist
+    in the DB because the WhatsApp save path was removed; this branch
+    is just a safety net.
     """
     s = (source_type or "").lower()
     if s in ("email", "chat"):
         return TAB_FROM_GMAIL
-    if s == "whatsapp":
-        return TAB_FROM_WHATSAPP
     return TAB_FROM_DISCUSSIONS
 
 

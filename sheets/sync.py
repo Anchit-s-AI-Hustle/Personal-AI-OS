@@ -2,10 +2,10 @@
 Background worker that flushes locally-stored tasks to Google Sheets.
 
 The DB is the source of truth, the sheet is the surface. Each task is
-DUAL-WRITTEN: once into the source-specific tab (Tasks From Mails,
-Tasks From Discussions, or Tasks From WhatsApp) and once into the
-consolidated "All Tasks" tab. If either append fails, the tasks stay
-marked unsynced and we retry on the next cycle.
+DUAL-WRITTEN: once into the source-specific tab (Tasks from Gmail or
+Tasks from In-Person Meetings) and once into the consolidated
+"Master Task List" tab. If either append fails, the tasks stay marked
+unsynced and we retry on the next cycle.
 """
 from __future__ import annotations
 
@@ -101,7 +101,6 @@ def _format_source_label(*, source_type: str, source_detail: str) -> str:
       Chat / DM             -> "Google Chat with <Name>"      (detail = "DM with <Name>")
       Chat / Group          -> "Google Chat group: <Name>"    (detail = "Group: <Name>")
       Chat / Space          -> "Google Space: <Name>"         (detail = "Space: <Name>")
-      WhatsApp              -> "WhatsApp with <Name>"         (detail = "WhatsApp: <Name>")
       Meeting / voice memo  -> "In-person meeting (<Self>)"   (detail = "voice memo by <Self>")
 
     Falls back gracefully for any detail that doesn't match a known
@@ -131,11 +130,6 @@ def _format_source_label(*, source_type: str, source_detail: str) -> str:
         if sl in ("google chat", "chat") or not sd:
             return "Google Chat"
         return f"Google Chat — {sd}"
-
-    if st.lower() == "whatsapp":
-        if sl.startswith("whatsapp:"):
-            return f"WhatsApp with {sd.split(':', 1)[1].strip()}"
-        return f"WhatsApp with {sd}" if sd else "WhatsApp"
 
     if st.lower() == "meeting":
         if sl.startswith("voice memo by "):

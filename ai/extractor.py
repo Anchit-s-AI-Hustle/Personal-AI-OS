@@ -192,59 +192,6 @@ class Extractor:
             follow_ups=_list_of_str("follow_ups"),
         )
 
-    # --- WhatsApp chat export ------------------------------------------------
-
-    def extract_from_whatsapp(
-        self,
-        *,
-        chat_partner: str,
-        exported_at: str,
-        chat_log: str,
-    ) -> MeetingChunkExtraction:
-        """
-        Reuse the meeting-shape extraction object — WhatsApp chats produce
-        the same fields (tasks + ideas/blockers/opportunities/decisions/
-        follow_ups). The source_type is set downstream in TaskService.
-        """
-        user_prompt = prompts.build_whatsapp_user_prompt(
-            chat_partner=chat_partner,
-            exported_at=exported_at,
-            chat_log=chat_log,
-        )
-        raw = self.client.complete(
-            system=prompts.WHATSAPP_SYSTEM_PROMPT,
-            user=user_prompt,
-            max_tokens=2000,
-            temperature=0.1,
-        )
-        try:
-            obj = _parse_json_block(raw)
-        except Exception:
-            logger.exception("WhatsApp extraction returned non-JSON; raw=%r", raw[:300])
-            return MeetingChunkExtraction(summary="(unparseable AI response)")
-
-        def _list_of_str(key: str) -> list[str]:
-            v = obj.get(key) or []
-            return [s for s in (_safe_str(x) for x in v) if s]
-
-        tasks: list[ExtractedTask] = []
-        for t in obj.get("tasks") or []:
-            if not isinstance(t, dict):
-                continue
-            coerced = _coerce_task(t)
-            if coerced:
-                tasks.append(coerced)
-
-        return MeetingChunkExtraction(
-            summary=_safe_str(obj.get("summary")) or "(no summary)",
-            tasks=tasks,
-            ideas=_list_of_str("ideas"),
-            blockers=_list_of_str("blockers"),
-            opportunities=_list_of_str("opportunities"),
-            decisions=_list_of_str("decisions"),
-            follow_ups=_list_of_str("follow_ups"),
-        )
-
     # --- daily summary -------------------------------------------------------
 
     def daily_summary(self, *, date_str: str, payload: str) -> dict[str, Any]:
