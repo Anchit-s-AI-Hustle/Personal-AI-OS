@@ -93,21 +93,55 @@ GROWTH_PILLARS_PROMPT_HINT = " | ".join(f'"{p}"' for p in GROWTH_PILLARS_LIST)
 TASK_SHAPE_HINT = dedent(
     f"""
     Each task object MUST have these fields:
-      "task_heading":      string  // imperative, <=70 chars (sheet column "Task Heading")
-      "task_description":  string  // 1-3 sentence detail; MUST include the
-                                   //   concrete topic/SKU/customer/campaign/channel
-                                   //   so the row stands alone without opening
-                                   //   the source. (sheet column "Task Description")
-      "rationale":         string  // why this matters, tied to a Vahdam revenue lever
+
+      "task_heading":      string  // SHORT imperative, <=70 chars. Specific
+                                   //   verb + concrete object. Examples:
+                                   //   "Send Aman the UK Q3 PPC split"
+                                   //   "Fix lending-page CTA on iOS Safari"
+                                   //   "Confirm 6 May go-live for hero SKUs"
+                                   //   NOT "Reply to email", NOT "Follow up".
+
+      "task_description":  string  // ONE sentence, <=180 chars, context-FIRST.
+                                   //   Lead with the concrete object (SKU /
+                                   //   campaign / customer / page / amount),
+                                   //   then say what needs to happen, then
+                                   //   any deadline reason. A reader who has
+                                   //   never seen the source should understand
+                                   //   this in 5 seconds.
+                                   //   GOOD: "Hero SKUs (Turmeric Ginger,
+                                   //     Ashwagandha) need revised UK Amazon
+                                   //     Q3 PPC budget split before Tuesday
+                                   //     agency call so Q3 creative briefs
+                                   //     unblock."
+                                   //   BAD: "Send the report. Aman needs it.
+                                   //     Important for Q3. Discussed in the
+                                   //     meeting today." (vague, multi-sentence)
+
+      "rationale":         string  // ONE sentence, ties to a Vahdam revenue
+                                   //   lever (acquisition / retention /
+                                   //   marketplace / operations / margin).
+                                   //   NOT "because email asked", NOT
+                                   //   "because Aman wants it".
+
       "growth_pillar":     one of [{GROWTH_PILLARS_PROMPT_HINT}]
-      "deadline":          string | null  // ISO date if known, else NL phrase ("Task Deadline")
-      "urgency":           "Low" | "Medium" | "High" | "Critical"   // -> "Priority"
-      "owner":             string | null  // SPOC name; null if truly unknown
-      "owner_contact":     string | null  // email OR phone number for the SPOC.
-                                          //   For email tasks, default to the
-                                          //   sender's email. For meetings/chat,
-                                          //   set null only if no contact is in
-                                          //   the source text.
+
+      "deadline":          string | null  // ISO date when you have one;
+                                          //   else natural-language phrase
+                                          //   from the source ("end of week",
+                                          //   "before Tuesday"). null only
+                                          //   when no deadline was implied.
+
+      "urgency":           "Low" | "Medium" | "High" | "Critical"
+
+      "owner":             string | null  // SPOC name (real human name only,
+                                          //   never an opaque ID). null if
+                                          //   genuinely unknown.
+
+      "owner_contact":     string | null  // email OR phone number for SPOC.
+                                          //   For email tasks default to the
+                                          //   sender's address. Set null only
+                                          //   when no contact appears in the
+                                          //   source.
     """
 ).strip()
 
