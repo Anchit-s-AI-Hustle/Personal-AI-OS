@@ -476,9 +476,12 @@ class SheetsClient:
                         "updateSheetProperties": {
                             "properties": {
                                 "sheetId": sheet_id,
-                                "gridProperties": {"frozenRowCount": 1},
+                                "gridProperties": {
+                                    "frozenRowCount": 1,
+                                    "frozenColumnCount": 4,
+                                },
                             },
-                            "fields": "gridProperties.frozenRowCount",
+                            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
                         }
                     },
                 ]
