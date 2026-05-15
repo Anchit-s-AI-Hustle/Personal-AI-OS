@@ -65,6 +65,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("spoc_contact",         "TEXT"),  # email / phone if known, otherwise null
         ("all_updates",          "TEXT"),  # newline-separated chronological updates
         ("normalized_heading",   "TEXT"),  # used to merge duplicate task rows
+        ("user_remarks",         "TEXT"),  # human-maintained notes from the tracker
+        ("last_human_update_at", "TEXT"),  # ISO 8601 when the user last touched the task
+        ("last_reminder_sent_at","TEXT"),  # ISO 8601 when the latest reminder went out
     ]
     for col, col_type in additions:
         if col not in existing:
@@ -391,6 +394,95 @@ class Database:
                 (new_value, task_id),
             )
 
+    def get_task(self, task_id: int) -> Optional[sqlite3.Row]:
+        return self.fetchone(
+            """
+            SELECT *
+              FROM extracted_tasks
+             WHERE id = ?
+            """,
+            (task_id,),
+        )
+
+    def update_task_tracker_fields(
+        self,
+        task_id: int,
+        *,
+        task: Optional[str] = None,
+        task_description: Optional[str] = None,
+        rationale: Optional[str] = None,
+        growth_pillar: Optional[str] = None,
+        sender_or_speaker: Optional[str] = None,
+        spoc_contact: Optional[str] = None,
+        urgency: Optional[str] = None,
+        deadline: Optional[str] = None,
+        all_updates: Optional[str] = None,
+        user_remarks: Optional[str] = None,
+        status: Optional[str] = None,
+        touched_by_user: bool = False,
+        normalized_heading: Optional[str] = None,
+    ) -> None:
+        sets: list[str] = ["synced_to_sheets = 0"]
+        params: list[Any] = []
+
+        updates = {
+            "task": task,
+            "task_description": task_description,
+            "rationale": rationale,
+            "growth_pillar": growth_pillar,
+            "sender_or_speaker": sender_or_speaker,
+            "spoc_contact": spoc_contact,
+            "urgency": urgency,
+            "deadline": deadline,
+            "all_updates": all_updates,
+            "user_remarks": user_remarks,
+            "status": status,
+            "normalized_heading": normalized_heading,
+        }
+        for col, value in updates.items():
+            if value is None:
+                continue
+            sets.append(f"{col} = ?")
+            params.append(value)
+
+        if touched_by_user:
+            sets.append("last_human_update_at = ?")
+            params.append(_utcnow())
+
+        params.append(task_id)
+        self.execute(
+            f"UPDATE extracted_tasks SET {', '.join(sets)} WHERE id = ?",
+            tuple(params),
+        )
+
+    def mark_reminder_sent(self, task_ids: Iterable[int]) -> None:
+        ids = [int(task_id) for task_id in task_ids]
+        if not ids:
+            return
+        now = _utcnow()
+        placeholders = ",".join("?" for _ in ids)
+        self.execute(
+            f"""
+            UPDATE extracted_tasks
+               SET last_reminder_sent_at = ?
+             WHERE id IN ({placeholders})
+            """,
+            (now, *ids),
+        )
+
+    def open_tasks_for_reminders(self) -> list[sqlite3.Row]:
+        return self.fetchall(
+            """
+            SELECT id, task, task_description, deadline, urgency, status,
+                   sender_or_speaker, spoc_contact, source_type, source_detail,
+                   source_link, all_updates, user_remarks, created_at,
+                   last_human_update_at, last_reminder_sent_at
+              FROM extracted_tasks
+             WHERE status = 'open'
+             ORDER BY created_at ASC
+            """
+        )
+
     def unsynced_tasks(self, limit: int = 100) -> list[sqlite3.Row]:
         # Order DESC by date_given so a fresh-rebuild push lays rows down
         # newest-first in the Sheet — i.e. the top rows are the most
@@ -403,7 +495,8 @@ class Database:
             SELECT id, source_type, source_ref_id, source_detail, source_link,
                    date_given, task, task_description, rationale, growth_pillar,
                    deadline, urgency, sender_or_speaker, spoc_contact,
-                   all_updates, summary, status, created_at
+                   all_updates, user_remarks, summary, status, created_at,
+                   sheet_row_source, sheet_row_all
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
              ORDER BY date_given IS NULL, date_given DESC, created_at DESC
@@ -450,7 +543,7 @@ class Database:
         if status not in {"open", "done", "dropped"}:
             raise ValueError(f"Invalid status {status!r}")
         self.execute(
-            "UPDATE extracted_tasks SET status = ? WHERE id = ?",
+            "UPDATE extracted_tasks SET status = ?, synced_to_sheets = 0 WHERE id = ?",
             (status, task_id),
         )
 

@@ -99,6 +99,11 @@ CREATE TABLE IF NOT EXISTS extracted_tasks (
     sender_or_speaker   TEXT,
     summary             TEXT,
     status              TEXT NOT NULL DEFAULT 'open', -- open | done | dropped
+    all_updates         TEXT,
+    user_remarks        TEXT,
+    normalized_heading  TEXT,
+    last_human_update_at TEXT,
+    last_reminder_sent_at TEXT,
     created_at          TEXT NOT NULL,
     synced_to_sheets    INTEGER NOT NULL DEFAULT 0,
     sheet_row           INTEGER,         -- legacy single-tab row

@@ -2,34 +2,14 @@
 Google Sheets API client.
 
 Maintains three tabs in a fixed order:
-    1. Master Task List              (every task across every source)
-    2. Tasks from Gmail              (emails + Google Chat DMs/Spaces/Groups)
-    3. Tasks from In-Person Meetings (meetings / voice memos / live calls)
+    1. Checklist Tracker              (interactive checklist surface)
+    2. Tasks from Gmail               (email + Google Chat source rows)
+    3. Tasks from In-Person Meetings  (meeting / voice memo source rows)
 
 Every task gets dual-written: one row in its source-specific tab and
-one row in "Master Task List". The local DB stores both row numbers so
-future status updates can patch both rows.
-
-Column layout (identical in all three tabs):
-    A  Task Heading
-    B  Task Description     (always includes context: project / topic / customer)
-    C  Task Given On        (pretty date — "12th May 2026, 2:16 AM")
-    D  Status               (open | done | dropped)
-    E  Source               (e.g. "Email from Aman", "Voice memo")
-    F  Source Link          (deep-link to the originating message/thread/session)
-    G  Why We're Doing This (the rationale / business reason)
-    H  Growth Pillar        (Operations | Retention | Acquisition | ... | Other)
-    I  SPOC                 (the person responsible — sender or speaker)
-    J  SPOC Contact         (email or phone — never blank if SPOC is set)
-    K  Priority             (Low | Medium | High | Critical)
-    L  Task Deadline        (when this should ship / be done by)
-    M  All Updates          (chronological log of follow-ups across sources)
-    N  Remarks              (left blank — for human use)
-    O  _iso_sort_key        (raw ISO timestamp; HIDDEN on Sheet & Excel —
-                              never visible to the user. Used solely as
-                              the sort-by column so the live Sheet stays
-                              DESC chronologically. Pretty dates in col C
-                              can't be sorted alphabetically.)
+one row in "Checklist Tracker". Hidden columns carry the raw ISO sort
+key and the stable DB task id so rows can be updated in place even
+after sorts or manual reordering.
 """
 from __future__ import annotations
 
@@ -46,13 +26,8 @@ from utils.retry import retry_call
 
 logger = get_logger(__name__)
 
-
-# Tab names — order matters; this is the order they're created/positioned.
-TAB_ALL_TASKS = "Master Task List"
+TAB_ALL_TASKS = "Checklist Tracker"
 TAB_FROM_GMAIL = "Tasks from Gmail"
-# Excel limits worksheet titles to 31 characters. The longer form
-# "Tasks from In-Person Discussions" is 32 chars, so we use this 29-char
-# variant that still reads clearly. Sheets and Excel use the same name.
 TAB_FROM_DISCUSSIONS = "Tasks from In-Person Meetings"
 TAB_ORDER: tuple[str, ...] = (
     TAB_ALL_TASKS,
@@ -60,130 +35,99 @@ TAB_ORDER: tuple[str, ...] = (
     TAB_FROM_DISCUSSIONS,
 )
 
-# Backward-compat alias so older imports (TAB_FROM_MAILS) keep working.
 TAB_FROM_MAILS = TAB_FROM_GMAIL
 
-# Legacy tab names. On the next ensure_tabs() boot we either rename them
-# (if the new name is the listed value) or just leave them; the explicit
-# rebuild_live_sheet script deletes any tab not in TAB_ORDER. WhatsApp
-# is listed here with the new name set to None so the rebuild script
-# knows to DELETE rather than rename.
 LEGACY_TAB_RENAMES: dict[str, str] = {
-    "All Tasks":                            TAB_ALL_TASKS,
-    "Tasks From Mails":                     TAB_FROM_GMAIL,
-    "Tasks From Discussions":               TAB_FROM_DISCUSSIONS,
-    # Catch the 32-char form a previous migration may have set.
-    "Tasks from In-Person Discussions":     TAB_FROM_DISCUSSIONS,
+    "All Tasks": TAB_ALL_TASKS,
+    "Master Task List": TAB_ALL_TASKS,
+    "Tasks From Mails": TAB_FROM_GMAIL,
+    "Tasks From Discussions": TAB_FROM_DISCUSSIONS,
+    "Tasks from In-Person Discussions": TAB_FROM_DISCUSSIONS,
 }
 
-
 HEADERS: list[str] = [
-    "Task Heading",       # A
-    "Task Description",   # B
-    "Task Given On",      # C  (moved up so the date is right next to the description)
-    "Status",             # D  (was C)
-    "Source",             # E  (was D)
-    "Source Link",        # F  (was E)
-    "Why We're Doing This",  # G
-    "Growth Pillar",      # H
-    "SPOC",               # I
-    "SPOC Contact",       # J
-    "Priority",           # K
-    "Task Deadline",      # L
-    "All Updates",        # M  (chronological log of follow-ups across sources)
-    "Remarks",            # N
-    "_iso_sort_key",      # O  HIDDEN — raw ISO timestamp, sole sort key
+    "Done?",                # A
+    "Task Heading",         # B
+    "Task Description",     # C
+    "Task Given On",        # D
+    "Status",               # E
+    "Source",               # F
+    "Source Link",          # G
+    "Why We're Doing This", # H
+    "Growth Pillar",        # I
+    "SPOC",                 # J
+    "SPOC Contact",         # K
+    "Priority",             # L
+    "Task Deadline",        # M
+    "All Updates",          # N
+    "Remarks",              # O
+    "_iso_sort_key",        # P hidden
+    "_task_id",             # Q hidden
 ]
 
-# The number of columns the user actually sees. Used by the rebuild
-# script + reverse-sync to constrain read ranges to the visible area.
-USER_VISIBLE_COLS = 14
+USER_VISIBLE_COLS = 15
+CHECKBOX_COL_LETTER = "A"
+STATUS_COL_LETTER = "E"
+SORT_KEY_COL_INDEX = 16
+SORT_KEY_COL_LETTER = "P"
+TASK_ID_COL_INDEX = 17
+TASK_ID_COL_LETTER = "Q"
 
-# 1-based column index (and A1 letter) of the hidden sort-key column.
-SORT_KEY_COL_INDEX = 15            # 1-based
-SORT_KEY_COL_LETTER = "O"
-
-# Status column letter — used by update_status. If HEADERS shifts, change here.
-# (Status moved from C to D when "Task Given On" was promoted to col C.)
-STATUS_COL_LETTER = "D"
-
-# Known prior schemas. Self-heal logic detects these by header-row equality
-# and migrates the worksheet onto the current HEADERS layout.
-#
-# Each entry maps {column index (0-based) -> blank to insert}. Indices are
-# applied in ascending order to a row matching the legacy layout, producing
-# a row matching HEADERS.
 LEGACY_SCHEMAS: list[tuple[list[str], list[int]]] = [
-    # 9-col pre-"Source": insert Source(D=3), Source Link(E=4), Date Given(F=5),
-    # SPOC Contact(J=9).
     (
         [
             "Task Heading", "Task Description", "Status",
             "Why We're Doing This", "Growth Pillar", "SPOC",
             "Priority", "Go Live", "Remarks",
         ],
-        [3, 4, 5, 9],
+        [0, 3, 4, 5, 9, 10, 13, 14, 15, 16],
     ),
-    # 10-col post-"Source" (the immediately previous schema): insert Source Link(E=4),
-    # Date Given(F=5), SPOC Contact(J=9).
     (
         [
             "Task Heading", "Task Description", "Status", "Source",
             "Why We're Doing This", "Growth Pillar", "SPOC",
             "Priority", "Go Live", "Remarks",
         ],
-        [4, 5, 9],
+        [0, 4, 5, 6, 10, 11, 14, 15, 16],
     ),
-    # 13-col schema with the old "Date Given" / "Go Live" header text
-    # (column positions identical to current HEADERS — just rewrite the
-    # header row, no data shift needed).
     (
         [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Date Given", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Go Live", "Remarks",
         ],
-        [],
+        [0, 13, 14, 15, 16],
     ),
-    # 13-col schema with intermediate "Task Given At" header text. No
-    # "All Updates" column yet — insert one at index 12 (M) so existing
-    # data shifts right one position; "Remarks" ends up at N.
     (
         [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Task Given At", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Task Deadline", "Remarks",
         ],
-        [12],
+        [0, 13, 14, 15, 16],
     ),
-    # 13-col schema with "Task Given On" (current names) but no "All
-    # Updates". Insert at index 12.
     (
         [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Task Given On", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Task Deadline", "Remarks",
         ],
-        [12],
+        [0, 13, 14, 15, 16],
     ),
-    # 14-col schema (with "All Updates" but no hidden _iso_sort_key).
-    # Append the sort key column at the end (index 14).
     (
         [
             "Task Heading", "Task Description", "Status", "Source", "Source Link",
             "Task Given On", "Why We're Doing This", "Growth Pillar", "SPOC",
             "SPOC Contact", "Priority", "Task Deadline", "All Updates", "Remarks",
         ],
-        [14],
+        [0, 15, 16],
     ),
 ]
 
-# Kept as an alias so older imports don't break.
 LEGACY_HEADERS_NO_SOURCE: list[str] = LEGACY_SCHEMAS[0][0]
 
 
 def _col_letter(n: int) -> str:
-    """1-based column index -> A1 letter (A, B, ..., Z, AA, AB, ...)."""
     if n < 1:
         raise ValueError("column index must be >= 1")
     result = ""
@@ -194,20 +138,6 @@ def _col_letter(n: int) -> str:
 
 
 def source_tab_for(source_type: str) -> str:
-    """
-    Map a task's source_type to its dedicated tab.
-
-    Tab routing:
-      - Email + Google Chat (DMs/Spaces/Groups) -> "Tasks from Gmail"
-        (Workspace lumps them together; the user wants them in one tab.)
-      - Meeting / Conversation / anything else  -> "Tasks from In-Person
-                                                    Meetings" (live audio).
-
-    WhatsApp support was removed — any rows with source_type='WhatsApp'
-    fall through to the In-Person Meetings tab. They shouldn't exist
-    in the DB because the WhatsApp save path was removed; this branch
-    is just a safety net.
-    """
     s = (source_type or "").lower()
     if s in ("email", "chat"):
         return TAB_FROM_GMAIL
@@ -222,18 +152,7 @@ class SheetsClient:
         self._tabs_ready = False
         self._lock = threading.Lock()
 
-    # --- bootstrap -----------------------------------------------------------
-
     def ensure_tabs(self) -> None:
-        """
-        Idempotent: create any missing tab in the right order, write headers
-        to anything that doesn't have them yet.
-
-        Step 0 — rename legacy tab names to current names so existing rows
-        are preserved across the rename. Applied BEFORE the create/missing
-        logic so we don't accidentally create a duplicate empty tab next
-        to the legacy one.
-        """
         with self._lock:
             if self._tabs_ready:
                 return
@@ -244,10 +163,6 @@ class SheetsClient:
                 for s in meta.get("sheets", [])
             }
 
-            # 0. Rename legacy tabs in place. Skip a rename when the new
-            #    name already exists (means a prior boot already migrated
-            #    or the user manually created the new tab) — leave the
-            #    legacy tab alone so manual cleanup is possible.
             rename_requests: list[dict] = []
             for old, new in LEGACY_TAB_RENAMES.items():
                 if old == new:
@@ -265,24 +180,16 @@ class SheetsClient:
                         }
                     )
             if rename_requests:
-                logger.info(
-                    "Renaming legacy tab(s): %s",
-                    [r["updateSheetProperties"]["properties"]["title"]
-                     for r in rename_requests],
-                )
                 try:
                     self._batch_update(rename_requests)
                 except Exception:
-                    logger.exception(
-                        "Could not rename legacy tabs; will retry next boot."
-                    )
+                    logger.exception("Could not rename legacy tabs; will retry next boot.")
                 meta = self._fetch_meta()
                 existing = {
                     s["properties"]["title"]: s["properties"]
                     for s in meta.get("sheets", [])
                 }
 
-            # 1. Create any missing tabs.
             create_requests: list[dict] = []
             for i, tab in enumerate(TAB_ORDER):
                 if tab not in existing:
@@ -290,10 +197,6 @@ class SheetsClient:
                         {"addSheet": {"properties": {"title": tab, "index": i}}}
                     )
             if create_requests:
-                logger.info(
-                    "Creating sheet tab(s): %s",
-                    [r["addSheet"]["properties"]["title"] for r in create_requests],
-                )
                 self._batch_update(create_requests)
                 meta = self._fetch_meta()
                 existing = {
@@ -301,7 +204,6 @@ class SheetsClient:
                     for s in meta.get("sheets", [])
                 }
 
-            # 2. Reorder so the three managed tabs sit at indices 0, 1, 2.
             move_requests: list[dict] = []
             for desired_index, tab in enumerate(TAB_ORDER):
                 props = existing.get(tab)
@@ -320,29 +222,20 @@ class SheetsClient:
                         }
                     )
             if move_requests:
-                logger.info("Reordering tabs to canonical order.")
                 try:
                     self._batch_update(move_requests)
                 except Exception:
-                    # Reordering can race with creation timestamps; non-fatal.
                     logger.debug("Tab reorder failed; will retry next boot.", exc_info=True)
 
-            # 3. Header row in every tab.
             for tab in TAB_ORDER:
                 self._ensure_header_row(tab)
 
-            # 4. Header styling (bold + frozen + light grey).
-            self._style_headers()
-
+            self._style_tabs()
             self._tabs_ready = True
 
     def _fetch_meta(self) -> dict:
         def _call() -> dict:
-            return (
-                self._svc.spreadsheets()
-                .get(spreadsheetId=self._sheet_id)
-                .execute()
-            )
+            return self._svc.spreadsheets().get(spreadsheetId=self._sheet_id).execute()
 
         return retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
 
@@ -356,9 +249,7 @@ class SheetsClient:
         retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
 
     def _ensure_header_row(self, tab: str) -> None:
-        # Read up to twice the current width so we still detect older headers
-        # that had fewer columns.
-        end_col = _col_letter(max(len(HEADERS), 13))
+        end_col = _col_letter(len(HEADERS))
         rng = f"'{tab}'!A1:{end_col}1"
 
         def _read() -> list:
@@ -373,25 +264,17 @@ class SheetsClient:
         rows = retry_call(_read, attempts=3, exceptions=(HttpError, TimeoutError))
         current_header = rows[0] if rows else []
         if current_header[: len(HEADERS)] == HEADERS and len(current_header) == len(HEADERS):
-            return  # already correct
+            return
 
-        # Legacy schema migration: shift existing data right so each row's
-        # cells realign with the new HEADERS, then rewrite the header.
         for legacy_header, insert_at in LEGACY_SCHEMAS:
             if current_header[: len(legacy_header)] == legacy_header:
-                logger.info(
-                    "Tab %r is on a legacy %d-col schema; inserting %d blank column(s) to migrate.",
-                    tab, len(legacy_header), len(insert_at),
-                )
                 self._insert_blank_columns(tab, insert_at)
                 break
-
-        logger.info("Writing header row to tab %r", tab)
 
         def _write() -> None:
             self._svc.spreadsheets().values().update(
                 spreadsheetId=self._sheet_id,
-                range=f"'{tab}'!A1:{_col_letter(len(HEADERS))}1",
+                range=f"'{tab}'!A1:{end_col}1",
                 valueInputOption="RAW",
                 body={"values": [HEADERS]},
             ).execute()
@@ -399,13 +282,6 @@ class SheetsClient:
         retry_call(_write, attempts=3, exceptions=(HttpError, TimeoutError))
 
     def _insert_blank_columns(self, tab: str, indices: list[int]) -> None:
-        """
-        Insert blank columns at the given 0-based indices on `tab`.
-
-        Indices must reference positions in the FINAL (post-insert) layout,
-        applied in ascending order. Each insertion shifts columns at and after
-        that position one to the right.
-        """
         if not indices:
             return
         meta = self._fetch_meta()
@@ -416,9 +292,6 @@ class SheetsClient:
                 break
         if sheet_id is None:
             return
-
-        # Apply ascending so each subsequent index is correct in the
-        # post-insert coordinate space.
         requests = [
             {
                 "insertDimension": {
@@ -438,14 +311,17 @@ class SheetsClient:
         except Exception:
             logger.exception("Could not insert blank columns into %r", tab)
 
-    def _style_headers(self) -> None:
-        """Bold + frozen + light-grey-fill row 1 across all 3 tabs."""
+    def _style_tabs(self) -> None:
         meta = self._fetch_meta()
         title_to_id = {
             s["properties"]["title"]: s["properties"]["sheetId"]
             for s in meta.get("sheets", [])
         }
         requests: list[dict] = []
+        col_pixels = [
+            70, 260, 420, 180, 110, 220, 220, 320, 140, 160, 220, 100, 160, 460, 220
+        ]
+
         for tab in TAB_ORDER:
             sheet_id = title_to_id.get(tab)
             if sheet_id is None:
@@ -464,9 +340,7 @@ class SheetsClient:
                             "cell": {
                                 "userEnteredFormat": {
                                     "textFormat": {"bold": True},
-                                    "backgroundColor": {
-                                        "red": 0.92, "green": 0.92, "blue": 0.92
-                                    },
+                                    "backgroundColor": {"red": 0.92, "green": 0.92, "blue": 0.92},
                                 }
                             },
                             "fields": "userEnteredFormat(textFormat,backgroundColor)",
@@ -478,7 +352,7 @@ class SheetsClient:
                                 "sheetId": sheet_id,
                                 "gridProperties": {
                                     "frozenRowCount": 1,
-                                    "frozenColumnCount": 4,
+                                    "frozenColumnCount": 5,
                                 },
                             },
                             "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
@@ -486,20 +360,160 @@ class SheetsClient:
                     },
                 ]
             )
+
+            for idx, px in enumerate(col_pixels):
+                requests.append(
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": idx,
+                                "endIndex": idx + 1,
+                            },
+                            "properties": {"pixelSize": px},
+                            "fields": "pixelSize",
+                        }
+                    }
+                )
+
+            for hidden_idx in (SORT_KEY_COL_INDEX - 1, TASK_ID_COL_INDEX - 1):
+                requests.append(
+                    {
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": hidden_idx,
+                                "endIndex": hidden_idx + 1,
+                            },
+                            "properties": {"hiddenByUser": True},
+                            "fields": "hiddenByUser",
+                        }
+                    }
+                )
+
+            for text_col_idx in (3, 12, 13):
+                requests.append(
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 1,
+                                "startColumnIndex": text_col_idx,
+                                "endColumnIndex": text_col_idx + 1,
+                            },
+                            "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
+                            "fields": "userEnteredFormat.numberFormat",
+                        }
+                    }
+                )
+
+            for wide_col_idx in (2, 7, 13, 14):
+                requests.append(
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 1,
+                                "startColumnIndex": wide_col_idx,
+                                "endColumnIndex": wide_col_idx + 1,
+                            },
+                            "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+                            "fields": "userEnteredFormat.wrapStrategy",
+                        }
+                    }
+                )
+
+            for status_val, fill, strike in [
+                ("done", {"red": 0.86, "green": 0.96, "blue": 0.85}, True),
+                ("dropped", {"red": 0.92, "green": 0.92, "blue": 0.92}, True),
+            ]:
+                requests.append(
+                    {
+                        "addConditionalFormatRule": {
+                            "rule": {
+                                "ranges": [{
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 1,
+                                    "startColumnIndex": 0,
+                                    "endColumnIndex": USER_VISIBLE_COLS,
+                                }],
+                                "booleanRule": {
+                                    "condition": {
+                                        "type": "CUSTOM_FORMULA",
+                                        "values": [{"userEnteredValue": f'=LOWER($E2)="{status_val}"'}],
+                                    },
+                                    "format": {
+                                        "backgroundColor": fill,
+                                        "textFormat": {"strikethrough": strike},
+                                    },
+                                },
+                            },
+                            "index": 0,
+                        }
+                    }
+                )
+
+            for prio_val, fill in [
+                ("Critical", {"red": 0.96, "green": 0.80, "blue": 0.80}),
+                ("High", {"red": 0.99, "green": 0.89, "blue": 0.78}),
+                ("Medium", {"red": 1.00, "green": 0.97, "blue": 0.82}),
+                ("Low", {"red": 0.93, "green": 0.93, "blue": 0.93}),
+            ]:
+                requests.append(
+                    {
+                        "addConditionalFormatRule": {
+                            "rule": {
+                                "ranges": [{
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 1,
+                                    "startColumnIndex": 11,
+                                    "endColumnIndex": 12,
+                                }],
+                                "booleanRule": {
+                                    "condition": {
+                                        "type": "TEXT_EQ",
+                                        "values": [{"userEnteredValue": prio_val}],
+                                    },
+                                    "format": {
+                                        "backgroundColor": fill,
+                                        "textFormat": {"bold": True},
+                                    },
+                                },
+                            },
+                            "index": 0,
+                        }
+                    }
+                )
+
+        checklist_gid = title_to_id.get(TAB_ALL_TASKS)
+        if checklist_gid is not None:
+            requests.append(
+                {
+                    "setDataValidation": {
+                        "range": {
+                            "sheetId": checklist_gid,
+                            "startRowIndex": 1,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": 1,
+                        },
+                        "rule": {
+                            "condition": {"type": "BOOLEAN"},
+                            "strict": True,
+                            "showCustomUi": True,
+                        },
+                    }
+                }
+            )
+
         if requests:
             try:
                 self._batch_update(requests)
             except Exception:
-                # Cosmetic — never fatal.
-                logger.debug("Could not apply header styling.", exc_info=True)
+                logger.debug("Could not apply sheet styling.", exc_info=True)
 
-    # --- appends -------------------------------------------------------------
-
-    def append_rows(self, tab: str, rows: list[list[str]]) -> Optional[int]:
-        """
-        Append `rows` to `tab`. Returns the 1-based row number where the
-        FIRST appended row landed (so the caller can map task ids back).
-        """
+    def append_rows(self, tab: str, rows: list[list[object]]) -> Optional[int]:
         if not rows:
             return None
         self.ensure_tabs()
@@ -527,26 +541,49 @@ class SheetsClient:
             digits = "".join(ch for ch in start if ch.isdigit())
             if digits:
                 first_row = int(digits)
-
-        logger.info(
-            "Appended %d row(s) to tab %r starting at row %s",
-            len(rows),
-            tab,
-            first_row,
-        )
         return first_row
 
-    def sort_tab_desc_by_sort_key(self, tab: str) -> None:
-        """
-        Sort all data rows in `tab` (everything below row 1) DESCENDING
-        by the hidden `_iso_sort_key` column (col O, dimension index 14).
+    def _find_row_by_task_id(self, tab: str, task_id: int) -> Optional[int]:
+        rng = f"'{tab}'!{TASK_ID_COL_LETTER}2:{TASK_ID_COL_LETTER}"
 
-        Safe to call after every append: if the tab is empty or only has
-        a header row, the API still accepts the request and is a no-op.
-        Failures are logged but never raised — sort is a UX nicety, not
-        load-bearing for data integrity.
-        """
-        # Resolve the tab's sheetId.
+        def _read() -> list:
+            resp = (
+                self._svc.spreadsheets()
+                .values()
+                .get(spreadsheetId=self._sheet_id, range=rng)
+                .execute()
+            )
+            return resp.get("values") or []
+
+        values = retry_call(_read, attempts=3, exceptions=(HttpError, TimeoutError))
+        for idx, row in enumerate(values, start=2):
+            if not row:
+                continue
+            if str(row[0]).strip() == str(task_id):
+                return idx
+        return None
+
+    def upsert_task_row(self, tab: str, task_id: int, row: list[object]) -> int:
+        self.ensure_tabs()
+        existing_row = self._find_row_by_task_id(tab, task_id)
+        end_col = _col_letter(len(HEADERS))
+
+        if existing_row is None:
+            first_row = self.append_rows(tab, [row])
+            return int(first_row or 2)
+
+        def _call() -> None:
+            self._svc.spreadsheets().values().update(
+                spreadsheetId=self._sheet_id,
+                range=f"'{tab}'!A{existing_row}:{end_col}{existing_row}",
+                valueInputOption="USER_ENTERED",
+                body={"values": [row]},
+            ).execute()
+
+        retry_call(_call, attempts=3, exceptions=(HttpError, TimeoutError))
+        return existing_row
+
+    def sort_tab_desc_by_sort_key(self, tab: str) -> None:
         meta = self._fetch_meta()
         sheet_gid: Optional[int] = None
         for s in meta.get("sheets", []):
@@ -554,20 +591,18 @@ class SheetsClient:
                 sheet_gid = s["properties"]["sheetId"]
                 break
         if sheet_gid is None:
-            logger.debug("sort_tab_desc_by_sort_key: tab %r not found.", tab)
             return
 
         request = {
             "sortRange": {
                 "range": {
                     "sheetId": sheet_gid,
-                    "startRowIndex": 1,                # skip the header
+                    "startRowIndex": 1,
                     "startColumnIndex": 0,
-                    "endColumnIndex": len(HEADERS),    # 15 columns total
+                    "endColumnIndex": len(HEADERS),
                 },
                 "sortSpecs": [
                     {
-                        # Dimension index is 0-based; col O = idx 14.
                         "dimensionIndex": SORT_KEY_COL_INDEX - 1,
                         "sortOrder": "DESCENDING",
                     }
@@ -577,14 +612,9 @@ class SheetsClient:
         try:
             self._batch_update([request])
         except Exception:
-            logger.exception(
-                "Failed to sort tab %r by _iso_sort_key (DESC). "
-                "Data is intact; only the sort order is affected.",
-                tab,
-            )
+            logger.exception("Failed to sort tab %r by _iso_sort_key.", tab)
 
     def update_status(self, tab: str, row_number: int, status: str) -> None:
-        """Update the Status column of the given 1-based row."""
         if row_number is None or row_number < 2:
             return
 
