@@ -1,11 +1,12 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 ls -la \"C:/Users/ARCHIT~1/AppData/Local/Temp/claude/c--Users-Archit-Tandon-Desktop-Personal-AI-OS/b2729e7c-769f-461e-952c-4526f6bf8216/tasks/\")"
+    ]
+  },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "cc-workflow-studio"
-  ],
-  "permissions": {
-    "allow": [
-      "Bash(.venv/Scripts/python.exe -c ' *)"
-    ]
-  }
+  ]
 }

@@ -6,13 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "powershell",
             "command": "powershell -ExecutionPolicy Bypass -File .claude/auto-commit.ps1",
+            "shell": "powershell",
             "timeout": 30,
             "async": true
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

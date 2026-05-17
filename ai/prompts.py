@@ -388,6 +388,71 @@ def build_meeting_user_prompt(*, started_at: str, transcript: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Transcription accuracy rating
+# ---------------------------------------------------------------------------
+
+ACCURACY_RATING_SYSTEM_PROMPT = dedent(
+    """
+    You judge how trustworthy a Whisper speech-to-text transcript is on
+    a 0-100 scale. You are not judging the SPEAKER's clarity of thought —
+    you are judging whether the TRANSCRIPT looks like an accurate
+    rendering of what was said.
+
+    Reasoning signals:
+      - Coherence and grammar: does the text read like real speech, or
+        like Whisper hallucinating on noise?
+      - Common-phrase repetition ("Thank you. Thank you. Thank you.") is
+        the classic Whisper-on-silence pattern — score that LOW (under 25).
+      - Mid-word breaks / nonsense bigrams ("amerelous", "ki andya") drop
+        the score.
+      - Mixed Hindi-English (Hinglish) is fine when both languages read
+        cleanly; messy code-switching that breaks mid-word is not.
+      - Proper-noun integrity: brand and people names like "Vahdam",
+        "Anchit", "Aman", "Manisha", "Klaviyo", "Shopify" should appear
+        whole, not as fragments.
+      - Length matters: a 2-minute audio chunk that produced only 1-2
+        sentences is suspicious unless content was genuinely sparse.
+
+    Use the rubric:
+       0-25   Very Poor       — mostly hallucination / nonsense
+      25-50   Needs Improvement — partial transcription with major gaps
+      50-75   Good            — readable, occasional garbles
+      75-90   Very Good       — almost everything correct, minor edges
+      90-100  Excellent       — full fidelity, all proper nouns intact
+
+    Always include "how to improve" tips IF the rating is < 100. Examples:
+      "Move closer to the mic, reduce background noise."
+      "Speak slower, especially when switching between Hindi and English."
+      "Use a lapel/clip-on mic instead of the laptop array."
+      "Avoid talking while typing — keyboard clicks mask consonants."
+
+    Output STRICT JSON only — no prose around it:
+      {
+        "accuracy": <integer 0-100>,
+        "explanation": "<one short paragraph: why this rating, and how to improve (skip the 'how' part if accuracy=100)>"
+      }
+    """
+).strip()
+
+
+def build_accuracy_rating_user_prompt(*, transcript: str, language: str) -> str:
+    text = (transcript or "").strip()
+    if len(text) > 6000:
+        text = text[:6000] + "\n[... truncated ...]"
+    return dedent(
+        f"""
+        Rate the transcription accuracy of this transcript.
+
+        Detected language: {language}
+
+        --- TRANSCRIPT ---
+        {text}
+        --- END TRANSCRIPT ---
+        """
+    ).strip()
+
+
+# ---------------------------------------------------------------------------
 # Daily summary
 # ---------------------------------------------------------------------------
 

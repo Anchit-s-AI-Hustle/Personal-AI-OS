@@ -218,6 +218,24 @@ def clean_sender_name(raw: Optional[str]) -> str:
     return raw
 
 
+# Cap for the source_text column. Long email bodies (newsletters, quoted
+# threads) blow up the sheet cell visually; 8000 chars is roughly two
+# pages of plain text — enough to keep useful context without exploding
+# the Sheet row height.
+_SOURCE_TEXT_MAX_CHARS = 8000
+
+
+def _truncate_source_text(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    if len(s) <= _SOURCE_TEXT_MAX_CHARS:
+        return s
+    return s[:_SOURCE_TEXT_MAX_CHARS].rstrip() + "\n... [truncated]"
+
+
 class TaskService:
     def __init__(self) -> None:
         self._db = get_db()
@@ -232,6 +250,7 @@ class TaskService:
         received_at: Optional[str] = None,
         thread_id: Optional[str] = None,
         sender_email: Optional[str] = None,
+        body_text: Optional[str] = None,
     ) -> int:
         # Source detail: human-readable name of who sent the email.
         detail = f"from {clean_sender_name(sender)}".strip()
@@ -251,6 +270,9 @@ class TaskService:
             summary=email_summary,
             default_speaker=clean_sender_name(sender) or sender,
             tasks=tasks,
+            source_text=_truncate_source_text(body_text),
+            transcription_accuracy=None,           # text — no STT involved
+            accuracy_explanation=None,
         )
 
     def save_meeting_tasks(
@@ -261,6 +283,9 @@ class TaskService:
         chunk_summary: Optional[str],
         tasks: Iterable[ExtractedTask],
         started_at: Optional[str] = None,
+        transcript_text: Optional[str] = None,
+        transcription_accuracy: Optional[int] = None,
+        accuracy_explanation: Optional[str] = None,
     ) -> int:
         ref = f"{session_id}:{chunk_index:04d}"
         # We're recording the user alone (no diarisation) — call it a voice memo.
@@ -276,6 +301,9 @@ class TaskService:
             summary=chunk_summary,
             default_speaker=None,
             tasks=tasks,
+            source_text=_truncate_source_text(transcript_text),
+            transcription_accuracy=transcription_accuracy,
+            accuracy_explanation=accuracy_explanation,
         )
 
     def save_chat_tasks(
@@ -289,6 +317,7 @@ class TaskService:
         source_link: Optional[str] = None,
         sent_at: Optional[str] = None,
         sender_contact: Optional[str] = None,
+        message_text: Optional[str] = None,
     ) -> int:
         return self._save(
             source_type="Chat",
@@ -300,6 +329,9 @@ class TaskService:
             summary=chat_summary,
             default_speaker=sender,
             tasks=tasks,
+            source_text=_truncate_source_text(message_text),
+            transcription_accuracy=None,           # text — no STT involved
+            accuracy_explanation=None,
         )
 
     def _save(
@@ -314,6 +346,9 @@ class TaskService:
         summary: Optional[str],
         default_speaker: Optional[str],
         tasks: Iterable[ExtractedTask],
+        source_text: Optional[str] = None,
+        transcription_accuracy: Optional[int] = None,
+        accuracy_explanation: Optional[str] = None,
     ) -> int:
         # Imported here to avoid a circular at module-load time.
         from sheets.sync import _format_source_label
@@ -385,6 +420,9 @@ class TaskService:
                 date_given=date_given,
                 spoc_contact=contact,
                 normalized_heading=normalized,
+                source_text=source_text,
+                transcription_accuracy=transcription_accuracy,
+                accuracy_explanation=accuracy_explanation,
             )
             if row_id is not None:
                 inserted += 1

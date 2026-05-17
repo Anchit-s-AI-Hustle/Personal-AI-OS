@@ -192,6 +192,63 @@ class Extractor:
             follow_ups=_list_of_str("follow_ups"),
         )
 
+    # --- transcription accuracy rating --------------------------------------
+
+    def rate_transcription_accuracy(
+        self,
+        *,
+        transcript: str,
+        language: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """
+        Score how trustworthy a Whisper transcript looks on a 0-100 scale.
+
+        Returns a dict like:
+            {"accuracy": 78,
+             "explanation": "Mostly clear English with some Hindi mixed in.
+                             Two garbled phrases mid-sentence. To improve:
+                             reduce background noise, move closer to the mic."}
+        or None on parse failure (caller will leave the cells blank).
+
+        Cheap call — short input, short JSON output, low temperature so
+        the rating is reproducible across re-runs of the same transcript.
+        """
+        text = (transcript or "").strip()
+        if not text:
+            return None
+
+        user = prompts.build_accuracy_rating_user_prompt(
+            transcript=text, language=language or "auto",
+        )
+        try:
+            raw = self.client.complete(
+                system=prompts.ACCURACY_RATING_SYSTEM_PROMPT,
+                user=user,
+                max_tokens=400,
+                temperature=0.0,
+            )
+        except Exception:
+            logger.exception("LLM call failed during accuracy rating.")
+            return None
+
+        try:
+            obj = _parse_json_block(raw)
+        except Exception:
+            logger.warning(
+                "Accuracy rating returned non-JSON; raw=%r", raw[:200],
+            )
+            return None
+
+        # Clamp to 0-100 and coerce to int.
+        try:
+            acc = int(round(float(obj.get("accuracy"))))
+            acc = max(0, min(100, acc))
+        except (TypeError, ValueError):
+            return None
+
+        explanation = _safe_str(obj.get("explanation")) or ""
+        return {"accuracy": acc, "explanation": explanation}
+
     # --- daily summary -------------------------------------------------------
 
     def daily_summary(self, *, date_str: str, payload: str) -> dict[str, Any]:

@@ -68,6 +68,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("user_remarks",         "TEXT"),  # human-maintained notes from the tracker
         ("last_human_update_at", "TEXT"),  # ISO 8601 when the user last touched the task
         ("last_reminder_sent_at","TEXT"),  # ISO 8601 when the latest reminder went out
+        ("source_text",            "TEXT"),     # raw source: email body / chat / audio transcript
+        ("transcription_accuracy", "INTEGER"),  # 0-100 LLM-estimated accuracy (null for non-audio)
+        ("accuracy_explanation",   "TEXT"),     # why this rating + how to improve
     ]
     for col, col_type in additions:
         if col not in existing:
@@ -296,6 +299,9 @@ class Database:
         date_given: Optional[str] = None,
         spoc_contact: Optional[str] = None,
         normalized_heading: Optional[str] = None,
+        source_text: Optional[str] = None,
+        transcription_accuracy: Optional[int] = None,
+        accuracy_explanation: Optional[str] = None,
     ) -> Optional[int]:
         """Returns the inserted row id, or None if it was a duplicate."""
         dedupe_hash = self.make_task_dedupe_hash(source_type, source_ref_id, task)
@@ -306,9 +312,10 @@ class Database:
                     source_type, source_ref_id, task, task_description, rationale,
                     growth_pillar, deadline, urgency, sender_or_speaker, summary,
                     source_detail, source_link, date_given, spoc_contact,
-                    normalized_heading, status, created_at, dedupe_hash
+                    normalized_heading, source_text, transcription_accuracy,
+                    accuracy_explanation, status, created_at, dedupe_hash
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
                 """,
                 (
                     source_type,
@@ -326,6 +333,9 @@ class Database:
                     date_given,
                     spoc_contact,
                     normalized_heading,
+                    source_text,
+                    transcription_accuracy,
+                    accuracy_explanation,
                     _utcnow(),
                     dedupe_hash,
                 ),
@@ -496,7 +506,8 @@ class Database:
                    date_given, task, task_description, rationale, growth_pillar,
                    deadline, urgency, sender_or_speaker, spoc_contact,
                    all_updates, user_remarks, summary, status, created_at,
-                   sheet_row_source, sheet_row_all
+                   sheet_row_source, sheet_row_all,
+                   source_text, transcription_accuracy, accuracy_explanation
               FROM extracted_tasks
              WHERE synced_to_sheets = 0
              ORDER BY date_given IS NULL, date_given DESC, created_at DESC

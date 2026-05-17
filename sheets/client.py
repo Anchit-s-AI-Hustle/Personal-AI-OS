@@ -62,32 +62,43 @@ LEGACY_TAB_RENAMES: dict[str, str] = {
 }
 
 HEADERS: list[str] = [
-    "Done?",                # A
-    "Task Heading",         # B
-    "Task Description",     # C
-    "Task Given On",        # D
-    "Status",               # E
-    "Source",               # F
-    "Source Link",          # G
-    "Why We're Doing This", # H
-    "Growth Pillar",        # I
-    "SPOC",                 # J
-    "SPOC Contact",         # K
-    "Priority",             # L
-    "Task Deadline",        # M
-    "All Updates",          # N
-    "Remarks",              # O
-    "_iso_sort_key",        # P hidden
-    "_task_id",             # Q hidden
+    "Done?",                          # A
+    "Task Heading",                   # B
+    "Task Description",               # C
+    "Task Given On",                  # D
+    "Accuracy Rating",                # E  (frozen — 0-100, color-coded red→green)
+    "Transcript",                     # F  (first UNFROZEN — raw source text)
+    "Status",                         # G  (moved from E)
+    "Source",                         # H
+    "Source Link",                    # I
+    "Why We're Doing This",           # J
+    "Growth Pillar",                  # K
+    "SPOC",                           # L
+    "SPOC Contact",                   # M
+    "Priority",                       # N
+    "Task Deadline",                  # O
+    "All Updates",                    # P
+    "Remarks",                        # Q
+    "Accuracy Rating Explanation",    # R  (LAST visible — explanation + how to improve)
+    "_iso_sort_key",                  # S  HIDDEN
+    "_task_id",                       # T  HIDDEN
 ]
 
-USER_VISIBLE_COLS = 15
+USER_VISIBLE_COLS = 18
 CHECKBOX_COL_LETTER = "A"
-STATUS_COL_LETTER = "E"
-SORT_KEY_COL_INDEX = 16
-SORT_KEY_COL_LETTER = "P"
-TASK_ID_COL_INDEX = 17
-TASK_ID_COL_LETTER = "Q"
+ACCURACY_COL_LETTER = "E"
+TRANSCRIPT_COL_LETTER = "F"
+STATUS_COL_LETTER = "G"
+ACCURACY_EXPLAIN_COL_LETTER = "R"
+SORT_KEY_COL_INDEX = 19
+SORT_KEY_COL_LETTER = "S"
+TASK_ID_COL_INDEX = 20
+TASK_ID_COL_LETTER = "T"
+
+# Cols A..E are frozen (so the user always sees Done, Heading, Description,
+# Date, and the Accuracy Rating). Transcript (F) is the first unfrozen
+# column so the user scrolls horizontally to read it.
+FROZEN_COLUMN_COUNT = 5
 
 LEGACY_SCHEMAS: list[tuple[list[str], list[int]]] = [
     (

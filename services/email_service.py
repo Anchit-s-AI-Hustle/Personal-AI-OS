@@ -88,6 +88,7 @@ class EmailService:
                 received_at=msg.received_at,
                 thread_id=msg.thread_id,
                 sender_email=_extract_email_address(msg.sender),
+                body_text=msg.body_text,
             )
 
         self._db.record_processed_email(

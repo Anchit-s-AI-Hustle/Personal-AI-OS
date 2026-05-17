@@ -116,11 +116,37 @@ def _row_for_task(task) -> list[object]:
     sort_key = date_given or get("created_at") or ""
     status = (get("status") or "open").strip().lower()
 
+    # Accuracy rating: 0-100 for audio-sourced rows, empty for text rows.
+    # Text sources (email / chat) are not "transcribed" — leave the
+    # rating cell blank so the gradient doesn't paint them.
+    raw_acc = get("transcription_accuracy")
+    if raw_acc == "" or raw_acc is None:
+        accuracy_cell: object = ""
+    else:
+        try:
+            accuracy_cell = int(raw_acc)
+        except (TypeError, ValueError):
+            accuracy_cell = ""
+
+    # Transcript: the raw source text. For email -> body; chat -> message
+    # text; meeting -> Whisper transcript. Stored in source_text by the
+    # respective service at insertion time. Older rows may not have it.
+    transcript = get("source_text") or ""
+
+    # Accuracy Rating Explanation + how-to-improve. Populated by the
+    # post-transcription LLM rating step (services/meeting_service.py).
+    accuracy_explanation = get("accuracy_explanation") or ""
+
     return [
+        # A..E (frozen): Done?, Heading, Description, Date, Accuracy Rating
         status == "done",
         get("task"),
         get("task_description"),
         _format_iso_timestamp(date_given),
+        accuracy_cell,
+        # F (first unfrozen): Transcript
+        transcript,
+        # G..Q: rest of the existing data
         status or "open",
         source_label,
         get("source_link"),
@@ -132,6 +158,9 @@ def _row_for_task(task) -> list[object]:
         _format_iso_timestamp(get("deadline")),
         get("all_updates"),
         get("user_remarks"),
+        # R: Accuracy Rating Explanation
+        accuracy_explanation,
+        # S, T: hidden sort key + task id
         sort_key,
         str(get("id")),
     ]

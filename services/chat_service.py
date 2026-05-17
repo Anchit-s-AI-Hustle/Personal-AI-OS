@@ -197,6 +197,7 @@ class ChatService:
                 source_link=source_link,
                 sent_at=msg.create_time,
                 sender_contact=clean_identifier(msg.sender_email),
+                message_text=msg.text,
             )
 
         self._db.record_processed_email(

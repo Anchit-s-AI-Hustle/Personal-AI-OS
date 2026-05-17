@@ -198,6 +198,28 @@ class MeetingService:
         except Exception:
             logger.exception("Could not persist transcript .txt for chunk %d", chunk.chunk_index)
 
+        # 4b. Rate the transcript's accuracy via the LLM so the user can
+        #     see at a glance how trustworthy each meeting row is.
+        #     This is cheap (one short LLM call) and only runs when we
+        #     actually have a transcript with tasks worth saving.
+        accuracy_pct: Optional[int] = None
+        accuracy_explanation: Optional[str] = None
+        if extraction and extraction.tasks:
+            try:
+                rating = self._extractor.rate_transcription_accuracy(
+                    transcript=transcription.text,
+                    language=transcription.language,
+                )
+                if rating is not None:
+                    accuracy_pct = rating.get("accuracy")
+                    accuracy_explanation = rating.get("explanation")
+            except Exception:
+                logger.exception(
+                    "Transcription accuracy rating failed for %s/%d; "
+                    "saving tasks without a rating.",
+                    chunk.session_id, chunk.chunk_index,
+                )
+
         # 5. Save tasks.
         if extraction and extraction.tasks:
             self._tasks.save_meeting_tasks(
@@ -206,6 +228,9 @@ class MeetingService:
                 chunk_summary=summary,
                 tasks=extraction.tasks,
                 started_at=chunk.started_at,
+                transcript_text=transcription.text,
+                transcription_accuracy=accuracy_pct,
+                accuracy_explanation=accuracy_explanation,
             )
 
         logger.info(
