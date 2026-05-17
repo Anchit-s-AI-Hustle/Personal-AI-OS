@@ -27,13 +27,29 @@ from utils.retry import retry_call
 logger = get_logger(__name__)
 
 TAB_ALL_TASKS = "Checklist Tracker"
+TAB_ALL_TASKS_DETAIL = "All Tasks"
 TAB_FROM_GMAIL = "Tasks from Gmail"
 TAB_FROM_DISCUSSIONS = "Tasks from In-Person Meetings"
+
+# Order matters: Checklist Tracker (daily-use condensed view) appears
+# first, then the new All Tasks (full-detail view), then per-source
+# condensed checklists.
 TAB_ORDER: tuple[str, ...] = (
     TAB_ALL_TASKS,
+    TAB_ALL_TASKS_DETAIL,
     TAB_FROM_GMAIL,
     TAB_FROM_DISCUSSIONS,
 )
+
+# Tabs that are CONDENSED — they hide cols H-N (Why / Growth Pillar /
+# SPOC / SPOC Contact / Priority / Task Deadline / All Updates) so the
+# user only sees A-G: the seven top critical fields.
+# Sort key (P) and task id (Q) are hidden on ALL tabs unconditionally.
+CONDENSED_TABS: frozenset[str] = frozenset({
+    TAB_ALL_TASKS,
+    TAB_FROM_GMAIL,
+    TAB_FROM_DISCUSSIONS,
+})
 
 TAB_FROM_MAILS = TAB_FROM_GMAIL
 

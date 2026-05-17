@@ -19,6 +19,7 @@ from utils.logger import get_logger
 from .client import (
     SheetsClient,
     TAB_ALL_TASKS,
+    TAB_ALL_TASKS_DETAIL,
     get_sheets_client,
     source_tab_for,
 )
@@ -187,6 +188,7 @@ class SheetsSyncWorker(threading.Thread):
                     rows_pushed += 1
                     touched_tabs.add(source_tab)
                     touched_tabs.add(TAB_ALL_TASKS)
+                    touched_tabs.add(TAB_ALL_TASKS_DETAIL)
 
             if len(tasks) < self._batch_size:
                 break
@@ -205,6 +207,17 @@ class SheetsSyncWorker(threading.Thread):
         try:
             source_row = self._client.upsert_task_row(tab, task_id, row)
             all_row = self._client.upsert_task_row(TAB_ALL_TASKS, task_id, row)
+            # Also write to the dedicated all-details tab. Failure here
+            # is logged but does NOT roll back the other two — the user
+            # can rebuild the All Tasks tab from scratch if needed.
+            try:
+                self._client.upsert_task_row(TAB_ALL_TASKS_DETAIL, task_id, row)
+            except Exception:
+                logger.exception(
+                    "All Tasks (detail) upsert failed for task id=%s "
+                    "(Checklist + source tab IS up to date).",
+                    task_id,
+                )
         except Exception:
             logger.exception("Could not upsert task id=%s to tab(s).", task_id)
             return False
@@ -218,6 +231,7 @@ class SheetsSyncWorker(threading.Thread):
         try:
             self._excel.upsert_task_row(tab, row)
             self._excel.upsert_task_row(TAB_ALL_TASKS, row)
+            self._excel.upsert_task_row(TAB_ALL_TASKS_DETAIL, row)
         except Exception:
             logger.exception("Excel mirror upsert failed (Google Sheet IS up to date).")
         return True
