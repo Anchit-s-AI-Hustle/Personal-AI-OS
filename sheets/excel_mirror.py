@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from typing import Optional
+from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -22,6 +23,19 @@ from utils.logger import get_logger
 from .client import HEADERS, LEGACY_SCHEMAS, LEGACY_TAB_RENAMES, TAB_ORDER
 
 logger = get_logger(__name__)
+
+# Exceptions that mean "the .xlsx on disk is unreadable — rebuild from
+# scratch rather than crashing." openpyxl raises InvalidFileException
+# for the obvious non-zip case, but BadZipFile (from the stdlib zipfile
+# module) and KeyError can also fire when the file is half-written or
+# the central directory is corrupt. Catching all three keeps a single
+# corrupt file from cascading into a main.py crash.
+_XLSX_CORRUPT_ERRORS: tuple[type[BaseException], ...] = (
+    InvalidFileException,
+    BadZipFile,
+    KeyError,            # openpyxl raises this when zip entries are missing
+    OSError,             # "Bad magic number" sometimes lands here
+)
 
 DEFAULT_PATH = settings.project_root / "tasks.xlsx"
 _HEADER_FONT = Font(bold=True)
@@ -62,7 +76,21 @@ class ExcelMirror:
             self._ensure_workbook()
             try:
                 wb = load_workbook(self._path)
-            except (FileNotFoundError, InvalidFileException):
+            except FileNotFoundError:
+                wb = self._build_empty_workbook()
+            except _XLSX_CORRUPT_ERRORS as exc:
+                logger.warning(
+                    "Excel mirror: %s is corrupt (%s); rebuilding from scratch.",
+                    self._path.name, type(exc).__name__,
+                )
+                # Park the corrupt file as a .bad sibling so the user
+                # can inspect it later if they care; don't lose it
+                # silently.
+                try:
+                    bad = self._path.with_suffix(self._path.suffix + ".bad")
+                    self._path.replace(bad)
+                except Exception:
+                    pass
                 wb = self._build_empty_workbook()
 
             if tab not in wb.sheetnames:

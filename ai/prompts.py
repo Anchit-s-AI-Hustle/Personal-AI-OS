@@ -249,8 +249,8 @@ EMAIL_SYSTEM_PROMPT = dedent(
 
 def build_email_user_prompt(*, sender: str, subject: str, received_at: str, body: str) -> str:
     body_clip = (body or "").strip()
-    if len(body_clip) > 12000:
-        body_clip = body_clip[:12000] + "\n[... truncated ...]"
+    if len(body_clip) > 6000:
+        body_clip = body_clip[:6000] + "\n[... truncated ...]"
     return dedent(
         f"""
         Analyse the following email.

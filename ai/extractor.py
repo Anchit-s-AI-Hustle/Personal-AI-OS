@@ -123,7 +123,7 @@ class Extractor:
         raw = self.client.complete(
             system=prompts.EMAIL_SYSTEM_PROMPT,
             user=user_prompt,
-            max_tokens=1500,
+            max_tokens=1000,
             temperature=0.1,
         )
         try:
