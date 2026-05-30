@@ -128,7 +128,11 @@ class PersonalAIOS:
         if self._enable_email:
             email_service = EmailService()
             self._gmail_poller = GmailPoller(
-                on_message=email_service.process_message,
+                # Pass email context to differentiate between vahdam and personal
+                on_message=lambda msg: email_service.process_message(
+                    msg, 
+                    target_sheet="Vahdam - Task Tracker" if "vahdam.com" in msg.to else "Anchit - Personal Tracker"
+                ),
                 stop_event=self.stop_event,
             )
             self._gmail_poller.start()
